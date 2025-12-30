@@ -12,12 +12,21 @@ defaults:
 jobs:
   build_and_test:
     permissions: write-all
-    name: >
-      Build and test a usbman on ${{ matrix.os }}.
+    name: Build and test a usbman on ${{ matrix.os }}.
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, macos-15-intel macos-15]
+        build:
+          - name: 'App'
+            platform:  'linux/amd64'
+            os: 'ubuntu-22.04'
+          - name: 'App'
+            platform:  'linux/amd64'
+            os: 'ubuntu-24.04'
+          - name: 'App'
+            platform:  'darwin/universal'
+            os: 'macos-15'
 
     steps:
       - name: Checkout Repository
@@ -35,7 +44,7 @@ jobs:
       - name: Build
         run: |
           pipenv run ./package_usbman
-          mv dist/usbman.tar.gz usbman-${{ matrix.os }}.tar.gz
+          mv dist/usbman.tar.gz usbman-${{ matrix.os }}-${{ matrix.platform }}.tar.gz
 
       - name: Minimaly test
         run: dist/usbman/usbman --help
@@ -43,4 +52,4 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: usbman-${{ matrix.os }}.tar.gz
+          files: usbman-${{ matrix.os }}-${{ matrix.platform }}.tar.gz
