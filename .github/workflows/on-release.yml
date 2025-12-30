@@ -21,15 +21,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: Linux
-          - os: macos-latest
-            target: Macos
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v2
 
       - name: Run the projects setup.
-        run: pip3 install pyinstaller pysatl pyserial
+        run: pip3 install --break-system-packages pyinstaller pysatl pyserial
 
       - name: Add msbuild to PATH
         if: ${{ matrix.os == 'windows-latest' }}
