@@ -17,10 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
-        include:
-          - os: ubuntu-latest
-            target: Linux
+        os: [ubuntu-22.04]
 
     steps:
       - name: Checkout Repository
@@ -34,7 +31,9 @@ jobs:
         uses: microsoft/setup-msbuild@v1.0.2
 
       - name: Build
-        run: ./package_usbman
+        run: |
+          ./package_usbman
+          mv dist/usbman.tar.gz usbman-${{ matrix.os }}.tar.gz
 
       - name: Minimaly test
         run: dist/usbman/usbman --help
@@ -42,4 +41,4 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/usbman.tar.gz
+          files: usbman-${{ matrix.os }}.tar.gz
