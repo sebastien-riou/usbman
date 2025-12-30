@@ -26,7 +26,7 @@ jobs:
       - name: Run the projects setup.
         run: |
           pip3 install pipenv 
-          pipenv install .
+          pipenv sync
 
       - name: Add msbuild to PATH
         if: ${{ matrix.os == 'windows-latest' }}
