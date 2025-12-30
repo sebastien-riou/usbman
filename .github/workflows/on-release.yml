@@ -1,0 +1,47 @@
+name: on-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_and_test:
+    permissions: write-all
+    name: >
+      Build and test a usbman on ${{ matrix.os }}.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        include:
+          - os: ubuntu-latest
+            target: Linux
+          - os: macos-latest
+            target: Macos
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Run the projects setup.
+        run: pip3 install pyinstaller pysatl pyserial
+
+      - name: Add msbuild to PATH
+        if: ${{ matrix.os == 'windows-latest' }}
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Build
+        run: ./package_usbman
+
+      - name: Minimaly test
+        run: dist/usbman/usbman --help
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/usbman/usbman.tar.gz
