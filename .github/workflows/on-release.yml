@@ -26,25 +26,32 @@ jobs:
           - name: 'App'
             platform:  'darwin/universal'
             os: 'macos-15'
-            
+
     runs-on: ${{ matrix.build.os }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v2
 
-      - name: Run the projects setup.
+      - name: setup generic
+        if: ${{ matrix.build.os != 'macos-15' }}
         run: |
           pip3 install pipenv 
           pipenv sync --python /bin/python3
 
+      - name: setup macos
+        if: ${{ matrix.build.os == 'macos-15' }}
+        run: |
+          pip3 install --break-system-packages pipenv 
+          pipenv sync --python /bin/python3
+
       - name: Add msbuild to PATH
-        if: ${{ matrix.os == 'windows-latest' }}
+        if: ${{ matrix.build.os == 'windows-latest' }}
         uses: microsoft/setup-msbuild@v1.0.2
 
       - name: Build
         run: |
           pipenv run ./package_usbman
-          mv dist/usbman.tar.gz usbman-${{ matrix.os }}-${{ matrix.platform }}.tar.gz
+          mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-${{ matrix.build.platform }}.tar.gz
 
       - name: Minimaly test
         run: dist/usbman/usbman --help
@@ -52,4 +59,4 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: usbman-${{ matrix.os }}-${{ matrix.platform }}.tar.gz
+          files: usbman-${{ matrix.build.os }}-${{ matrix.build.platform }}.tar.gz
