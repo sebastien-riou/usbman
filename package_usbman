@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -ex
+
+rm -rf dist
+pipenv run pyinstaller usbman.py
+rm usbman.spec
+cd dist
+tar czf usbman.tar.gz usbman
