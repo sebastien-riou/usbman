@@ -12,8 +12,7 @@ defaults:
 jobs:
   build_and_test:
     permissions: write-all
-    name: Build and test a usbman on ${{ matrix.os }}.
-    runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
