@@ -81,6 +81,7 @@ jobs:
           files: |
             usbman-ubuntu-22.04-amd64/*
             usbman-ubuntu-24.04-amd64/*
+            usbman-macos-15-amd64/*
 
   # create_release:
   #   name: Create release
