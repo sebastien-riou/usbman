@@ -8,6 +8,7 @@ pyinstaller = "*"
 pysatl = "*"
 pyserial = "*"
 macholib = "*"
+ruff = "*"
 
 [dev-packages]
 
