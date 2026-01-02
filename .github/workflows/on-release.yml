@@ -52,9 +52,12 @@ jobs:
       - name: Minimaly test
         run: dist/usbman/usbman --help
 
-      - name: Release
+      - name: Rename
         if: ${{ matrix.build.platform == 'linux/amd64' }}
         run: mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-amd64.tar.gz
+
+      - name: Release
+        if: ${{ matrix.build.platform == 'linux/amd64' }}
         uses: softprops/action-gh-release@v2
         with:
           files: usbman-${{ matrix.build.os }}-amd64.tar.gz
