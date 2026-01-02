@@ -4,6 +4,3 @@ set -ex
 
 rm -rf dist
 pyinstaller __main__.spec
-#rm usbman.spec
-cd dist
-tar czf usbman.tar.gz usbman
