@@ -1,6 +1,8 @@
 # usbman
 Software to control 'managed' USB hubs compatible with 'cuspi' closed source binary.
-For example  [startech 7 ports hub](https://www.startech.com/en-us/usb-hubs/5g7aindrm-usb-a-hub).
+For example:
+- [startech 7 ports hub](https://www.startech.com/en-us/usb-hubs/5g7aindrm-usb-a-hub).
+- [coolgear 7 ports hub](https://www.coolgear.com/product/7-port-managed-usb-3-hub-w-15kv-esd-surge-protection-on-off-per-port-control-software)
 
 ![StarTech.com managed hub](startech-hub-7.jpg?raw=true "StarTech.com managed hub")
 
