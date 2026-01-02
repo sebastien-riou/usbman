@@ -56,7 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: usbman-${{ matrix.build.os }}-amd64
-          path: dist/usbman-${{ matrix.build.os }}-amd64.tar.gz
+          path: dist/usbman.tar.gz
 
   release:
     permissions: write-all
