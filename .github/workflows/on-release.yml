@@ -68,9 +68,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-
       - name: Checkout Repository
         uses: actions/checkout@v2
 
@@ -81,6 +78,9 @@ jobs:
           pipenv run ./lint
           pipenv run ./buildit
 
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        
       - name: info  
         run: |
           pwd
