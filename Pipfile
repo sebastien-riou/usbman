@@ -9,6 +9,7 @@ pysatl = "*"
 pyserial = "*"
 macholib = "*"
 ruff = "*"
+black = "*"
 
 [dev-packages]
 
