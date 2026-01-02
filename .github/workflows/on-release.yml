@@ -51,7 +51,7 @@ jobs:
       - name: Build
         run: |
           pipenv run ./package_usbman
-          mv dist/usbman.tar.gz usbman-${{ matrix.build.platform }}.tar.gz
+          mv dist/usbman usbman-${{ matrix.build.platform }}
 
       - name: Minimaly test
         run: dist/usbman/usbman --help
@@ -60,7 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: usbman-${{ matrix.build.platform }}
-          path: usbman-${{ matrix.build.platform }}.tar.gz
+          path: usbman-${{ matrix.build.platform }}
 
   release:
     permissions: write-all
@@ -69,16 +69,28 @@ jobs:
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
+
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Build wheel
+        run: |
+          pip3 install pipenv 
+          pipenv sync --python /bin/python3
+          ./lint
+          ./buildit
+
       - name: info  
         run: |
           pwd
           echo $GITHUB_WORKSPACE
           ls -la
           ls -R
+          
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             usbman-ubuntu-22.04-amd64/*
             usbman-ubuntu-24.04-amd64/*
-#            usbman-macos-15-intel/*
+            dist/*
