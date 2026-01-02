@@ -11,17 +11,20 @@ For example  [startech 7 ports hub](https://www.startech.com/en-us/usb-hubs/5g7a
 pip install usbman
 ````
 
-### Using pyinstaller
+### Using a pre-built release
+Place the binary in your PATH.
+
+### From source, using pyinstaller
 This build a native package.
 
 ````
+git clone https://github.com/sebastien-riou/usbman.git
+cd usbman
+pipenv sync
 pipenv run ./package_usbman
 ````
 
 Add `dist/usbman` in your PATH.
-
-### Using a pre-built release
-Place the binary in your PATH.
 
 ## How to
 
