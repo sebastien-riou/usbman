@@ -9,7 +9,7 @@
 name: Upload Python Package
 
 on:
-  release:
+  release: #works only for manually created release using GitHub UI
     types: [published]
 
 permissions:
