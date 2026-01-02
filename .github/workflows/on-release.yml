@@ -18,11 +18,14 @@ jobs:
       matrix:
         build:
           - name: 'usbman'
-            platform:  'linux/amd64'
+            platform:  'amd64'
             os: 'ubuntu-22.04'
           - name: 'usbman'
-            platform:  'linux/amd64'
+            platform:  'amd64'
             os: 'ubuntu-24.04'
+          - name: 'usbman'
+            platform:  'amd64'
+            os: 'macos-15'
 
     runs-on: ${{ matrix.build.os }}
     steps:
@@ -39,7 +42,7 @@ jobs:
         if: ${{ matrix.build.os == 'macos-15' }}
         run: |
           pip3 install --break-system-packages pipenv 
-          pipenv sync
+          pipenv sync --python /usr/local/bin/python3
 
       - name: Add msbuild to PATH
         if: ${{ matrix.build.os == 'windows-latest' }}
