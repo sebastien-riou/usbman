@@ -45,20 +45,18 @@ jobs:
         if: ${{ matrix.build.os == 'windows-latest' }}
         uses: microsoft/setup-msbuild@v1.0.2
 
-      - name: platform amd64
-        if: ${{ matrix.build.platform == 'linux/amd64' }}
-        env:
-          platform: amd64
-
       - name: Build
         run: |
           pipenv run ./package_usbman
-          mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-${{ platform }}.tar.gz
 
       - name: Minimaly test
         run: dist/usbman/usbman --help
 
       - name: Release
+        if: ${{ matrix.build.platform == 'linux/amd64' }}
+        env:
+          platform: amd64
+        run: mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-${{ platform }}.tar.gz
         uses: softprops/action-gh-release@v2
         with:
           files: usbman-${{ matrix.build.os }}-${{ platform }}.tar.gz
