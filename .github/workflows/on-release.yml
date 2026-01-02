@@ -78,7 +78,7 @@ jobs:
         run: |
           pip3 install pipenv 
           pipenv sync --python /bin/python3
-          ./lint
+          pipenv run ./lint
           ./buildit
 
       - name: info  
