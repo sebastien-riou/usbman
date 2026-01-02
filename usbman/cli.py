@@ -1,6 +1,7 @@
-import os
 import argparse
 import logging
+import os
+
 from usbman import get_state, set_state
 
 
@@ -54,6 +55,7 @@ def main():
             if current_state & (1 << (i - 1)):
                 print(f'{i} ', end='')
         print('')
+
 
 if __name__ == '__main__':
     main()

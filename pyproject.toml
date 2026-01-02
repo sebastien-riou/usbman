@@ -102,7 +102,7 @@ ban-relative-imports = "all"
 "test/**/*" = ["TID252", "S101", "T201"]
 # CLI can print
 "usbman/clicom.py" = ["T201"]
-"usbman/__main__.py" = ["T201","I001"]
+"usbman/cli.py" = ["T201","I001"]
 
 [tool.mypy]
 disallow_untyped_defs = false
