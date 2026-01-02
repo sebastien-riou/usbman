@@ -74,4 +74,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: usbman*.tar.gz
+          files: |
+            usbman-ubuntu-22.04-amd64.tar.gz
+            usbman-ubuntu-24.04-amd64.tar.gz
