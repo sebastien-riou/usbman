@@ -23,9 +23,9 @@ jobs:
           - name: 'usbman'
             platform:  'ubuntu-24.04-amd64'
             os: 'ubuntu-24.04'
-          - name: 'usbman'
-            platform:  'macos-15-intel'
-            os: 'macos-15-intel'
+#          - name: 'usbman'
+#            platform:  'macos-15-intel'
+#            os: 'macos-15-intel'
 
     runs-on: ${{ matrix.build.os }}
     steps:
@@ -81,64 +81,4 @@ jobs:
           files: |
             usbman-ubuntu-22.04-amd64/*
             usbman-ubuntu-24.04-amd64/*
-            usbman-macos-15-intel/*
-
-  # create_release:
-  #   name: Create release
-  #   needs: build
-  #   permissions: write-all
-  #   runs-on: ubuntu-latest
-  #   # Note this. We are going to use that in further jobs.
-  #   outputs:
-  #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-  #   steps:
-  #     - name: Create release
-  #       id: create_release
-  #       uses: ncipollo/release-action@v1
-
-  # release_assets:
-  #   name: Release assets
-  #   needs: create_release # we need to know the upload URL
-  #   permissions: write-all
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Download Artifacts
-  #       uses: actions/download-artifact@v4
-  #     - name: info  
-  #       run: |
-  #         pwd
-  #         echo $GITHUB_WORKSPACE
-  #         ls -la
-  #         ls -R
-  #     - name: Upload release assets
-  #       uses: actions/upload-release-asset@v1
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       with:
-  #         upload_url: ${{ needs.create_release.outputs.upload_url }}
-  #         # This is how it will be named on the release page. Put hatever name
-  #         # you like, remember that they need to be different for each platform.
-  #         # You can choose any build matrix parameters. For Rust I use the
-  #         # target triple.
-  #         asset_name: usbman-ubuntu-24.04-amd64.tar.gz
-  #         # The path to the file you want to upload.
-  #         asset_path: usbman-ubuntu-24.04-amd64/usbman.tar.gz
-  #         # probably you will need to change it, but most likely you are
-  #         # uploading a binary file
-  #         asset_content_type: application/octet-stream
-  #     - name: Upload release assets 2
-  #       uses: actions/upload-release-asset@v1
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       with:
-  #         upload_url: ${{ needs.create_release.outputs.upload_url }}
-  #         # This is how it will be named on the release page. Put hatever name
-  #         # you like, remember that they need to be different for each platform.
-  #         # You can choose any build matrix parameters. For Rust I use the
-  #         # target triple.
-  #         asset_name: usbman-ubuntu-22.04-amd64.tar.gz
-  #         # The path to the file you want to upload.
-  #         asset_path: usbman-ubuntu-22.04-amd64/usbman.tar.gz
-  #         # probably you will need to change it, but most likely you are
-  #         # uploading a binary file
-  #         asset_content_type: application/octet-stream
+#            usbman-macos-15-intel/*
