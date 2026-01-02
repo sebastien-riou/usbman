@@ -55,7 +55,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: usbman-${{ matrix.build.os }}-amd64.tar.gz
+          name: usbman-${{ matrix.build.os }}-amd64
           path: dist/usbman.tar.gz
 
   # release:
@@ -115,7 +115,7 @@ jobs:
           # target triple.
           asset_name: usbman-ubuntu-24.04-amd64.tar.gz
           # The path to the file you want to upload.
-          asset_path: usbman-ubuntu-24.04-amd64.tar.gz
+          asset_path: usbman-ubuntu-24.04-amd64/usbman.tar.gz
           # probably you will need to change it, but most likely you are
           # uploading a binary file
           asset_content_type: application/octet-stream
@@ -129,7 +129,7 @@ jobs:
           # target triple.
           asset_name: usbman-ubuntu-22.04-amd64.tar.gz
           # The path to the file you want to upload.
-          asset_path: usbman-ubuntu-22.04-amd64.tar.gz
+          asset_path: usbman-ubuntu-22.04-amd64/usbman.tar.gz
           # probably you will need to change it, but most likely you are
           # uploading a binary file
           asset_content_type: application/octet-stream
