@@ -33,19 +33,19 @@ Add `dist/usbman` in your PATH.
 ### Display the current state
 This list the channels which are ON:
 ````
-usbman
+usbman --device-path /dev/ttyUSB0
 ````
 
 ### Turn on some channels
 This turns on channels 1 and 5:
 ````
-usbman --on 1 5
+usbman --device-path /dev/ttyUSB0 --on 1 5
 ````
 
 ### Turn off some channels
 This turn off channel 1 and 5:
 ````
-usbman --off 1 5
+usbman --device-path /dev/ttyUSB0 --off 1 5
 ````
 
 
