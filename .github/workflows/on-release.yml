@@ -54,9 +54,7 @@ jobs:
 
       - name: Release
         if: ${{ matrix.build.platform == 'linux/amd64' }}
-        env:
-          platform: amd64
-        run: mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-${{ platform }}.tar.gz
+        run: mv dist/usbman.tar.gz usbman-${{ matrix.build.os }}-amd64.tar.gz
         uses: softprops/action-gh-release@v2
         with:
-          files: usbman-${{ matrix.build.os }}-${{ platform }}.tar.gz
+          files: usbman-${{ matrix.build.os }}-amd64.tar.gz
