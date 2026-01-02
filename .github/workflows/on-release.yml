@@ -10,7 +10,7 @@ defaults:
     shell: bash
 
 jobs:
-  build_and_test:
+  build:
     permissions: write-all
 
     strategy:
@@ -57,7 +57,7 @@ jobs:
         with:
           name: usbman-${{ matrix.os }}-amd64
           path: dist/usbman-${{ matrix.os }}-amd64.tar.gz
-          
+
   release:
     needs: build
     runs-on: ubuntu-latest
