@@ -17,10 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         build:
-          - name: 'App'
+          - name: 'usbman'
             platform:  'linux/amd64'
             os: 'ubuntu-22.04'
-          - name: 'App'
+          - name: 'usbman'
             platform:  'linux/amd64'
             os: 'ubuntu-24.04'
 
@@ -68,4 +68,4 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: *.tar.gz
+          files: usbman*/*
