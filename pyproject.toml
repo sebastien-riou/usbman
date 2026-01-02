@@ -36,6 +36,8 @@ doc = [
 "Homepage" = "https://github.com/sebastien-riou/usbman"
 "Bug Tracker" = "https://github.com/sebastien-riou/usbman/issues"
 
+[project.scripts]
+usbman = "usbman.cli:main"
 
 [tool.black]
 target-version = ["py310"]
