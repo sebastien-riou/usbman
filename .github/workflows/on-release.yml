@@ -55,7 +55,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: usbman-${{ matrix.build.os }}-amd64
+          name: usbman-${{ matrix.build.os }}-amd64.tar.gz
           path: dist/usbman.tar.gz
 
   release:
@@ -68,4 +68,4 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: usbman-*/usbman-*
+          files: usbman-*.tar.gz
