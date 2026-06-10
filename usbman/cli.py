@@ -1,7 +1,7 @@
 import argparse
 import logging
 import os
-import time 
+import time
 
 from usbman import get_state, set_state
 
@@ -50,7 +50,7 @@ def main():
         current_state = final_state
     else:
         current_state = org_state
-    
+
     if set_off_pulse:
         for i in set_off_pulse:
             state &= ~(1 << (i - 1))
