@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import time 
 
 from usbman import get_state, set_state
 
@@ -14,6 +15,8 @@ def main():
 
     parser.add_argument('--on', default=[], help='turn channel(s) on', nargs='+', type=int)
     parser.add_argument('--off', default=[], help='turn channel(s) off', nargs='+', type=int)
+    parser.add_argument('--off-pulse', default=[], help='turn channel(s) off and on', nargs='+', type=int)
+    parser.add_argument('--toff', default=1000, help='off-pulse duration seconds', type=float)
 
     args = parser.parse_args()
     device_path = args.device_path
@@ -25,6 +28,7 @@ def main():
     logging.debug(f'args = {args}')
     set_on = set(args.on)
     set_off = set(args.off)
+    set_off_pulse = set(args.off_pulse)
     conflicts = set.intersection(set_on, set_off)
     if conflicts:
         logging.error(f'ON and OFF arguments are conflicting for channels {conflicts}')
@@ -32,7 +36,6 @@ def main():
 
     org_state = get_state(device_path)
     state = org_state
-    logging.debug(f'org_state = {org_state:#02x}, state = {state:#02x}')
     if set_on:
         for i in set_on:
             state |= 1 << (i - 1)
@@ -47,6 +50,18 @@ def main():
         current_state = final_state
     else:
         current_state = org_state
+    
+    if set_off_pulse:
+        for i in set_off_pulse:
+            state &= ~(1 << (i - 1))
+        tmp_state = set_state(device_path, state)
+        logging.debug(f'tmp_state = {tmp_state:#02x}')
+        time.sleep(args.toff)
+        for i in set_off_pulse:
+            state |= 1 << (i - 1)
+        current_state = set_state(device_path, state)
+        logging.debug(f'current_state = {current_state:#02x}')
+
     if 0 == current_state:
         print('All off')
     else:
