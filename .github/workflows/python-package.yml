@@ -34,7 +34,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-        pip3 install --require-hashes pipenv==2026.6.2 --hash=sha256:60ebe825a4fa061573b43006174bbcda2a2baae1a6f07720cb17d96db1b1b3af
+        pip3 install --require-hashes -r requirements.txt
         pipenv --python /bin/python3 install
         # python -m pip install --require-hashes --upgrade pip
         # python -m pip install --require-hashes black ruff pytest
