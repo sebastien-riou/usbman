@@ -43,14 +43,14 @@ jobs:
       - name: setup generic
         if: ${{ matrix.build.os != 'macos-15-intel' }}
         run: |
-          pip3 install pipenv 
-          pipenv sync --python /bin/python3
+          pip3 install -r requirements.txt
+          pipenv --python /bin/python3 install -d
 
       - name: setup macos
         if: ${{ matrix.build.os == 'macos-15-intel' }}
         run: |
-          pip3 install --break-system-packages pipenv 
-          pipenv sync --python /usr/local/bin/python3
+          pip3 install --break-system-packages -r requirements.txt
+          pipenv --python /usr/local/bin/python3 install -d
 
       - name: Add msbuild to PATH
         if: ${{ matrix.build.os == 'windows-latest' }}
@@ -86,8 +86,8 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip3 install pipenv 
-          pipenv sync --python /bin/python3
+          pip3 install -r requirements.txt
+          pipenv --python /bin/python3 install -d
           pipenv run ./lint
           pipenv run ./buildit
 
