@@ -34,10 +34,10 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-        python -m pip install --required-hashes --upgrade pip
-        python -m pip install --required-hashes black ruff pytest
-        python -m pip install --required-hashes .
-        if [ -f requirements.txt ]; then pip install --required-hashes -r requirements.txt; fi
+        python -m pip install --require-hashes --upgrade pip
+        python -m pip install --require-hashes black ruff pytest
+        python -m pip install --require-hashes .
+        if [ -f requirements.txt ]; then pip install --require-hashes -r requirements.txt; fi
     - name: Lint 
       run: |
         ./lint
