@@ -35,7 +35,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip3 install -r requirements.txt
-        pipenv --python /bin/python3 install
+        pipenv --python /bin/python3 install -d
         # python -m pip install --require-hashes --upgrade pip
         # python -m pip install --require-hashes black ruff pytest
         # python -m pip install --require-hashes .
