@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--on', default=[], help='turn channel(s) on', nargs='+', type=int)
     parser.add_argument('--off', default=[], help='turn channel(s) off', nargs='+', type=int)
     parser.add_argument('--off-pulse', default=[], help='turn channel(s) off and on', nargs='+', type=int)
-    parser.add_argument('--toff', default=1000, help='off-pulse duration seconds', type=float)
+    parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
 
     args = parser.parse_args()
     device_path = args.device_path
