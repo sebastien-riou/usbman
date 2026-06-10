@@ -1,4 +1,6 @@
 # usbman
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sebastien-riou/usbman/badge)](https://scorecard.dev/viewer/?uri=github.com/sebastien-riou/usbman)
+
 Software to control 'managed' USB hubs compatible with 'cuspi' closed source binary.
 For example:
 - [startech 7 ports hub](https://www.startech.com/en-us/usb-hubs/5g7aindrm-usb-a-hub).
