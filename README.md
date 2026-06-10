@@ -50,4 +50,8 @@ This turn off channel 1 and 5:
 usbman --device-path /dev/ttyUSB0 --off 1 5
 ````
 
-
+### Turn off some channels for some time and turn back on
+This turn off channel 1 and 5 for 0.5 second:
+````
+usbman --device-path /dev/ttyUSB0 --off-pulse 1 5 --toff=0.5
+````
