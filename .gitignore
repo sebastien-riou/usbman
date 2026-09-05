@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Vendor CLI, kept locally as the reference for the hub protocol. Not ours to redistribute.
+/cusbi
