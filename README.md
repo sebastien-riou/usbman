@@ -33,30 +33,21 @@ Add `dist/usbman` in your PATH.
 ## How to
 
 ### Select the device
-`--device` is optional: when it is omitted, `usbman` locates the hub on the USB tree. The
-control interface of a managed hub is a serial chip wired to one of the hub downstream ports, so it is recognized by the combination of
-its own USB ids and of the ids of the hub it hangs on. Detection reads USB ids only, it never
-sends anything to a device, so the devices you plugged into the managed hub are left alone.
-
-Pass `--device` explicitly when detection finds nothing or finds several managed hubs, and on
-the systems which do not expose the USB tree in sysfs the way Linux does. All the examples below
-work the same way without `--device`. The full name of the option is `--device-path`, `--device`
-is the abbreviation used throughout this file.
-
-A USB to serial adapter plugged into a managed hub uses the same chips as the control
-interface and hangs on the same hub, so the two look alike. They are told apart by the
-downstream port they are on: a hub wires its control interface to a fixed port, which is never
-one of the ports you can plug into. The port is only looked at to break such a tie, so a hub
-whose control port is not recorded is still detected as long as it is the only candidate.
-
-`usbman --log-level DEBUG` lists every serial device with the USB ids of the device itself and
-the ids and downstream port of the hub it is connected to, as in:
+`--device` is optional: leave it out and `usbman` finds the hub on its own, so all the examples
+below work the same way without it.
 ````
-DEBUG:  /dev/ttyUSB0 (0403:6001 on port 4 of hub 14b0:044c), FT232R USB UART
+usbman
 ````
-Supporting another managed hub model is a matter of adding what it reports to
-`MANAGED_HUB_USB_IDS`, `CONTROL_UART_USB_IDS` and `CONTROL_UART_HUB_PORTS` in
-[usbman/__init__.py](usbman/__init__.py).
+Give it when you have more than one managed hub, or when `usbman` tells you it could not find
+one:
+````
+usbman --device /dev/ttyUSB0
+````
+`--device` is the short form of `--device-path`, and is used throughout this file.
+
+Detection only reads USB identifiers, it never sends anything to a device, so whatever you have
+plugged into the hub is left alone. It needs Linux, and it needs your hub model to be known —
+see [AUTO-DETECT.md](AUTO-DETECT.md) if it does not find your hub.
 
 ### Display the current state
 This list the channels which are ON:
@@ -113,29 +104,10 @@ state left by the pulse, in which every pulsed channel is on.
 ## Protocol
 The hub speaks 9600 8N1 on the serial control interface. A command is a two character opcode,
 then, for the ones that write, an 8 character password field (`pass` followed by 4 spaces by
-default), then an optional payload as hex, then a carriage return. A reply is the 4 payload
-bytes as hex, sometimes prefixed with `G`, or `E` followed by a two character error code, `E01`
-meaning the password was refused.
+default), then an optional payload as hex, then a carriage return. `usbman` uses three of them:
+`GP` to read the channel states, `SP` to set them and `WP` to save them as the power up states.
+It refuses to send any other opcode, `CP`, which changes the password, above all: a mistake
+there locks the hub out for good.
 
-The payload holds 8 channels per byte, little endian, so its 4 bytes cover the 32 channels of
-the largest hubs of the family. This one has 7, all in the first byte.
-
-| Command | `cusbi` option | Meaning |
-| --- | --- | --- |
-| `GP\r` | `/G` | get the channel states, no password |
-| `?Q…` | `/Q` | enumerate the hubs, no password |
-| `SPpass    XXXXXXXX\r` | `/S` | set the channel states |
-| `FPpass    XXXXXXXX\r` | `/F` | set the channel states and save them as the power up states |
-| `WPpass    \r` | `/W` | save the current channel states as the power up states |
-| `RDpass    \r` | `/D` | restore the factory defaults |
-| `RHpass    \r` | `/R` | reset the whole hub |
-| `CPpass    <new>\r` | `/P` | change the password |
-
-`usbman` implements `GP`, `SP` and `WP`. It refuses to send any other opcode, `CP` above all:
-it takes the same password field as the rest, so a mistake there locks the hub out for good.
-
-This table was read out of the vendor CLI `cusbi` v1.03 for Linux, which ships as an unstripped
-ELF with debug info: `strings` gives the command strings and its own help text, and `objdump -d`
-shows which of them each of its `DoSetPortState` / `DoSavePortState` / ... functions uses and
-what it expects back. Before that, what little was known had been obtained by sniffing `cusbi`
-over USB with Wireshark and [parse_usb_json](parse_usb_json).
+[NOTES.md](NOTES.md) documents the protocol in full, including the commands `usbman` does not
+use, and how to re-derive any of it from the vendor CLI.
