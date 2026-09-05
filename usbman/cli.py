@@ -3,7 +3,7 @@ import logging
 import os
 import time
 
-from usbman import get_state, set_state
+from usbman import find_device_path, get_state, set_state
 
 
 def main():
@@ -11,7 +11,9 @@ def main():
     parser = argparse.ArgumentParser(scriptname)
     levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
     parser.add_argument('--log-level', default='INFO', choices=levels)
-    parser.add_argument('--device-path', default='/dev/ttyUSB0', help='Path to the serial device', type=str)
+    parser.add_argument(
+        '--device-path', default=None, help='Path to the serial device, auto detected if not specified', type=str
+    )
 
     parser.add_argument('--on', default=[], help='turn channel(s) on', nargs='+', type=int)
     parser.add_argument('--off', default=[], help='turn channel(s) off', nargs='+', type=int)
@@ -19,13 +21,22 @@ def main():
     parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
 
     args = parser.parse_args()
-    device_path = args.device_path
 
     logformat = '%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s'
     logdatefmt = '%Y-%m-%d %H:%M:%S'
     logging.basicConfig(level=args.log_level, format=logformat, datefmt=logdatefmt)
 
     logging.debug(f'args = {args}')
+
+    device_path = args.device_path
+    if device_path is None:
+        try:
+            device_path = find_device_path()
+        except RuntimeError as e:
+            logging.error(f'{e}')
+            exit(-1)
+        logging.info(f'Using auto detected device {device_path}')
+
     set_on = set(args.on)
     set_off = set(args.off)
     set_off_pulse = set(args.off_pulse)
