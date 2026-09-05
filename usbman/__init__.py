@@ -7,11 +7,50 @@ from pysatl import Utils
 
 from usbman.clicom import serial_command_response
 
+# The 8 character password field every write command carries. This is the factory default of
+# the hubs; the `CP` command changes it, see `OPCODES` below.
+PASSWORD = 'pass    '
+
+# Wire commands of the hub, as read out of the vendor CLI `cusbi` v1.03: it is an unstripped
+# ELF, so its command strings and the functions using them are readable with `strings` and
+# `objdump`. A command is a two character opcode, then the 8 character password field for the
+# ones that write, then an optional payload as hex, then a carriage return.
+#
+# `CP`, which changes the password, is deliberately absent: it takes the very same password
+# field as the commands below, so a mistake there locks the hub out for good. Add an opcode
+# here only once it has been verified in `cusbi`.
+OPCODES = {
+    'GP': 'get the channel states',  # cusbi /G, no password
+    'SP': 'set the channel states',  # cusbi /S
+    'WP': 'save the channel states as the power up states',  # cusbi /W
+}
+
+# Number of payload bytes a command carries: 8 channels per byte, little endian, so the 4 bytes
+# cover the 32 channels of the largest hubs of the family. Taken from `htos_PS64` in `cusbi`.
+PAYLOAD_LEN = 4
+
+
+def command(opcode: str, payload: bytes = b'') -> str:
+    """Return the command string for `opcode`, with its password field and optional payload."""
+    if opcode not in OPCODES:
+        raise ValueError(f'Refusing to send the unverified command {opcode!r}, see OPCODES')
+    # `payload.hex()` and not `Utils.hexstr`, which separates the bytes with spaces.
+    return f'{opcode}{PASSWORD}{payload.hex().upper()}\r'
+
+
+# Failures are reported as 'E' followed by a two character code, 'E01' being a wrong password.
+# The length matters: a state reply is 8 hex characters and may well start with an 'E' too,
+# since the first byte is always 0x80 or above ('E5FFFFFF' is the perfectly valid state 1,3,6,7).
+ERROR_LEN = 3
+ERROR_REASONS = {b'E01': 'wrong password'}
+
 
 def decode_result(res: str) -> int:
     logging.debug(f'res = {res}')
-    if res == b'EFF\r\n':
-        raise RuntimeError(f'Device returned "{res}"')
+    body = res.strip()
+    if body.startswith(b'E') and len(body) == ERROR_LEN:
+        reason = ERROR_REASONS.get(body, 'command refused')
+        raise RuntimeError(f'Device returned "{res}" ({reason})')
     if res.startswith(b'G'):
         res = res[1:]
     state = res[:2]
@@ -29,11 +68,21 @@ def get_state(device_path) -> int:
 
 
 def set_state(device_path, state: int) -> int:
-    state |= 0x80
-    state = Utils.hexstr(state.to_bytes(1, byteorder='little'))
-    command = f'SPpass    {state}FFFFFF\r'
-    logging.debug(f'set state command: {command}')
-    state = serial_command_response(device_path, send_str=command)
+    payload = bytes([0x80 | state]) + b'\xff' * (PAYLOAD_LEN - 1)
+    cmd = command('SP', payload)
+    logging.debug(f'set state command: {cmd}')
+    state = serial_command_response(device_path, send_str=cmd)
+    return decode_result(state)
+
+
+def save_state(device_path) -> int:
+    """Store the current channel states as the ones the hub powers up with.
+
+    Return the states the hub reports back. This is what `cusbi /W` does.
+    """
+    cmd = command('WP')
+    logging.debug(f'save state command: {cmd}')
+    state = serial_command_response(device_path, send_str=cmd)
     return decode_result(state)
 
 
@@ -90,8 +139,7 @@ class SerialDevice(NamedTuple):
 
     def __str__(self) -> str:
         return (
-            f'{self.path} ({usb_id_str(self.usb_id)} on port {self.hub_port} '
-            f'of hub {usb_id_str(self.hub_usb_id)})'
+            f'{self.path} ({usb_id_str(self.usb_id)} on port {self.hub_port} ' f'of hub {usb_id_str(self.hub_usb_id)})'
         )
 
 

@@ -3,7 +3,7 @@ import logging
 import os
 import time
 
-from usbman import CHANNELS, find_device_path, get_state, set_state
+from usbman import CHANNELS, find_device_path, get_state, save_state, set_state
 
 # Accepted in place of a channel number to designate every channel of the hub at once.
 ALL_CHANNELS = 'all'
@@ -28,6 +28,15 @@ def channel_set(values) -> set:
 
 
 def main():
+    """Run the command line, reporting the errors the hub reports without a traceback."""
+    try:
+        run()
+    except RuntimeError as e:
+        logging.error(f'{e}')
+        exit(-1)
+
+
+def run():
     scriptname = os.path.basename(__file__)
     parser = argparse.ArgumentParser(scriptname)
     levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -45,6 +54,9 @@ def main():
         '--off-pulse', default=[], help=f'turn channel(s) off and on: {channels_help}', nargs='+', type=channel
     )
     parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
+    parser.add_argument(
+        '--save', action='store_true', help='store the resulting state as the one the hub powers up with'
+    )
 
     args = parser.parse_args()
 
@@ -98,6 +110,11 @@ def main():
             state |= 1 << (i - 1)
         current_state = set_state(device_path, state)
         logging.debug(f'current_state = {current_state:#02x}')
+
+    # Last, so that the state saved is the one every other argument has just produced.
+    if args.save:
+        current_state = save_state(device_path)
+        logging.debug(f'saved_state = {current_state:#02x}')
 
     if 0 == current_state:
         print('All off')

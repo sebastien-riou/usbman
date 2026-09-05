@@ -1,7 +1,7 @@
 # usbman
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sebastien-riou/usbman/badge)](https://scorecard.dev/viewer/?uri=github.com/sebastien-riou/usbman)
 
-Software to control 'managed' USB hubs compatible with 'cuspi' closed source binary.
+Software to control 'managed' USB hubs compatible with the 'cusbi' closed source binary.
 For example:
 - [startech 7 ports hub](https://www.startech.com/en-us/usb-hubs/5g7aindrm-usb-a-hub).
 - [coolgear 7 ports hub](https://www.coolgear.com/product/7-port-managed-usb-3-hub-w-15kv-esd-surge-protection-on-off-per-port-control-software)
@@ -95,3 +95,47 @@ usbman --device /dev/ttyUSB0 --off-pulse all --toff=0.5
 ````
 Note that the pulsed channels are all on when the command returns, whether they were on or off
 to begin with.
+
+### Persist the state across power down
+The hub can store a state in its flash and come up in that state after a power down. `--save`
+stores whatever state the command ends up with, so this turns channels 1 and 5 on and makes
+that the state the hub powers up with:
+````
+usbman --device /dev/ttyUSB0 --on 1 5 --save
+````
+`--save` on its own stores the state the hub is currently in:
+````
+usbman --device /dev/ttyUSB0 --save
+````
+It applies last, after `--on`, `--off` and `--off-pulse`, so `--off-pulse ... --save` stores the
+state left by the pulse, in which every pulsed channel is on.
+
+## Protocol
+The hub speaks 9600 8N1 on the serial control interface. A command is a two character opcode,
+then, for the ones that write, an 8 character password field (`pass` followed by 4 spaces by
+default), then an optional payload as hex, then a carriage return. A reply is the 4 payload
+bytes as hex, sometimes prefixed with `G`, or `E` followed by a two character error code, `E01`
+meaning the password was refused.
+
+The payload holds 8 channels per byte, little endian, so its 4 bytes cover the 32 channels of
+the largest hubs of the family. This one has 7, all in the first byte.
+
+| Command | `cusbi` option | Meaning |
+| --- | --- | --- |
+| `GP\r` | `/G` | get the channel states, no password |
+| `?Q…` | `/Q` | enumerate the hubs, no password |
+| `SPpass    XXXXXXXX\r` | `/S` | set the channel states |
+| `FPpass    XXXXXXXX\r` | `/F` | set the channel states and save them as the power up states |
+| `WPpass    \r` | `/W` | save the current channel states as the power up states |
+| `RDpass    \r` | `/D` | restore the factory defaults |
+| `RHpass    \r` | `/R` | reset the whole hub |
+| `CPpass    <new>\r` | `/P` | change the password |
+
+`usbman` implements `GP`, `SP` and `WP`. It refuses to send any other opcode, `CP` above all:
+it takes the same password field as the rest, so a mistake there locks the hub out for good.
+
+This table was read out of the vendor CLI `cusbi` v1.03 for Linux, which ships as an unstripped
+ELF with debug info: `strings` gives the command strings and its own help text, and `objdump -d`
+shows which of them each of its `DoSetPortState` / `DoSavePortState` / ... functions uses and
+what it expects back. Before that, what little was known had been obtained by sniffing `cusbi`
+over USB with Wireshark and [parse_usb_json](parse_usb_json).
