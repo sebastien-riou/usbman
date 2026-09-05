@@ -37,6 +37,9 @@ def set_state(device_path, state: int) -> int:
     return decode_result(state)
 
 
+# Channels of a managed hub, channel `n` being the bit `n - 1` of the hub state.
+CHANNELS = tuple(range(1, 8))
+
 # USB ids of the hubs known to embed a managed control interface.
 # The managed hub appears as one or several plain USB hubs; the control interface is a serial
 # chip wired to one of their downstream ports. `lsusb` reports these ids, and `usbman

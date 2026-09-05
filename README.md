@@ -69,11 +69,19 @@ This turns on channels 1 and 5:
 ````
 usbman --device /dev/ttyUSB0 --on 1 5
 ````
+`all` stands for every channel of the hub, so this turns them all on:
+````
+usbman --device /dev/ttyUSB0 --on all
+````
 
 ### Turn off some channels
 This turn off channel 1 and 5:
 ````
 usbman --device /dev/ttyUSB0 --off 1 5
+````
+And this turns them all off:
+````
+usbman --device /dev/ttyUSB0 --off all
 ````
 
 ### Turn off some channels for some time and turn back on
@@ -81,3 +89,9 @@ This turn off channel 1 and 5 for 0.5 second:
 ````
 usbman --device /dev/ttyUSB0 --off-pulse 1 5 --toff=0.5
 ````
+`all` works here too, this power cycles the whole hub:
+````
+usbman --device /dev/ttyUSB0 --off-pulse all --toff=0.5
+````
+Note that the pulsed channels are all on when the command returns, whether they were on or off
+to begin with.

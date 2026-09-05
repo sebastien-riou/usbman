@@ -3,7 +3,28 @@ import logging
 import os
 import time
 
-from usbman import find_device_path, get_state, set_state
+from usbman import CHANNELS, find_device_path, get_state, set_state
+
+# Accepted in place of a channel number to designate every channel of the hub at once.
+ALL_CHANNELS = 'all'
+
+
+def channel(value: str) -> str:
+    """argparse type of the `--on`, `--off` and `--off-pulse` values: a channel number or 'all'."""
+    if value == ALL_CHANNELS:
+        return value
+    if not value.isdigit() or int(value) not in CHANNELS:
+        raise argparse.ArgumentTypeError(
+            f"invalid channel '{value}', expected {CHANNELS[0]} to {CHANNELS[-1]} or '{ALL_CHANNELS}'"
+        )
+    return value
+
+
+def channel_set(values) -> set:
+    """Return the channels designated by a `--on`, `--off` or `--off-pulse` argument."""
+    if ALL_CHANNELS in values:
+        return set(CHANNELS)
+    return {int(value) for value in values}
 
 
 def main():
@@ -17,9 +38,12 @@ def main():
         '--device-path', default=None, help='Path to the serial device, auto detected if not specified', type=str
     )
 
-    parser.add_argument('--on', default=[], help='turn channel(s) on', nargs='+', type=int)
-    parser.add_argument('--off', default=[], help='turn channel(s) off', nargs='+', type=int)
-    parser.add_argument('--off-pulse', default=[], help='turn channel(s) off and on', nargs='+', type=int)
+    channels_help = f"channel numbers, or '{ALL_CHANNELS}' for all of them"
+    parser.add_argument('--on', default=[], help=f'turn channel(s) on: {channels_help}', nargs='+', type=channel)
+    parser.add_argument('--off', default=[], help=f'turn channel(s) off: {channels_help}', nargs='+', type=channel)
+    parser.add_argument(
+        '--off-pulse', default=[], help=f'turn channel(s) off and on: {channels_help}', nargs='+', type=channel
+    )
     parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
 
     args = parser.parse_args()
@@ -39,9 +63,9 @@ def main():
             exit(-1)
         logging.info(f'Using auto detected device {device_path}')
 
-    set_on = set(args.on)
-    set_off = set(args.off)
-    set_off_pulse = set(args.off_pulse)
+    set_on = channel_set(args.on)
+    set_off = channel_set(args.off)
+    set_off_pulse = channel_set(args.off_pulse)
     conflicts = set.intersection(set_on, set_off)
     if conflicts:
         logging.error(f'ON and OFF arguments are conflicting for channels {conflicts}')
@@ -79,7 +103,7 @@ def main():
         print('All off')
     else:
         print('On: ', end='')
-        for i in range(1, 8):
+        for i in CHANNELS:
             if current_state & (1 << (i - 1)):
                 print(f'{i} ', end='')
         print('')
