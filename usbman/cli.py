@@ -11,6 +11,8 @@ def main():
     parser = argparse.ArgumentParser(scriptname)
     levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
     parser.add_argument('--log-level', default='INFO', choices=levels)
+    # argparse accepts any unambiguous prefix, so this is also usable as '--device'. Keep it
+    # the only option starting with '--d' for that shorter spelling to remain available.
     parser.add_argument(
         '--device-path', default=None, help='Path to the serial device, auto detected if not specified', type=str
     )
