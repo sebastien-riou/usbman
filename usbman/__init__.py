@@ -48,6 +48,8 @@ ERROR_REASONS = {b'E01': 'wrong password'}
 def decode_result(res: str) -> int:
     logging.debug(f'res = {res}')
     body = res.strip()
+    if 0 == len(body):
+        raise RuntimeError('Device did not answer')
     if body.startswith(b'E') and len(body) == ERROR_LEN:
         reason = ERROR_REASONS.get(body, 'command refused')
         raise RuntimeError(f'Device returned "{res}" ({reason})')

@@ -83,7 +83,23 @@ def run():
         logging.error(f'ON and OFF arguments are conflicting for channels {conflicts}')
         exit(-1)
 
-    org_state = get_state(device_path)
+    get_state_errors = []
+    org_state = None
+    for i in range(3): 
+        try:
+            org_state = get_state(device_path)
+            if i > 0:
+                logging.info('Device communication succesfully restored')
+            break
+        except Exception as e:
+            logging.warning(e)
+            get_state_errors.append(e)
+
+    if org_state is None:
+        # fatal error
+        logging.critical('Could not communicate with the device')
+        exit(-2)
+        
     state = org_state
     if set_on:
         for i in set_on:
