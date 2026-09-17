@@ -53,25 +53,34 @@ This list the channels which are ON:
 usbman --device /dev/ttyUSB0
 ````
 
-### Turn on some channels
-This turns on channels 1 and 5:
+### Turn some channels on or off
+`--set` turns channels on and `--clear` turns them off, both leaving every other channel as it
+was. This turns channels 1 and 5 on, whatever the others are doing:
 ````
-usbman --device /dev/ttyUSB0 --on 1 5
+usbman --device /dev/ttyUSB0 --set 1 5
 ````
-`all` stands for every channel of the hub, so this turns them all on:
+And this turns them off again:
 ````
-usbman --device /dev/ttyUSB0 --on all
+usbman --device /dev/ttyUSB0 --clear 1 5
+````
+`--clr` is a shorter spelling of `--clear`. `all` stands for every channel of the hub, so this
+turns everything off:
+````
+usbman --device /dev/ttyUSB0 --clr all
 ````
 
-### Turn off some channels
-This turn off channel 1 and 5:
+### Decide the state of every channel at once
+`--on` is absolute: the channels you list end up on and **every other one ends up off**. This
+leaves channels 2, 3 and 5 on and the rest off, whatever the hub was doing before:
 ````
-usbman --device /dev/ttyUSB0 --off 1 5
+usbman --device /dev/ttyUSB0 --on 2 3 5
 ````
-And this turns them all off:
-````
-usbman --device /dev/ttyUSB0 --off all
-````
+Because it already decides every channel, `--on` cannot be combined with `--set`, `--clear` or
+`--off-pulse`; asking for both is refused rather than silently resolved.
+
+> **Changed in 2.0** — `--on` used to mean what `--set` means now. A command line such as
+> `usbman --on 1 5` still works but no longer leaves the other channels alone: replace it with
+> `--set 1 5` to keep the old behaviour.
 
 ### Turn off some channels for some time and turn back on
 This turn off channel 1 and 5 for 0.5 second:
@@ -90,14 +99,14 @@ The hub can store a state in its flash and come up in that state after a power d
 stores whatever state the command ends up with, so this turns channels 1 and 5 on and makes
 that the state the hub powers up with:
 ````
-usbman --device /dev/ttyUSB0 --on 1 5 --save
+usbman --device /dev/ttyUSB0 --set 1 5 --save
 ````
 `--save` on its own stores the state the hub is currently in:
 ````
 usbman --device /dev/ttyUSB0 --save
 ````
-It applies last, after `--on`, `--off` and `--off-pulse`, so `--off-pulse ... --save` stores the
-state left by the pulse, in which every pulsed channel is on.
+It applies last, after the channel options, so `--off-pulse ... --save` stores the state left by
+the pulse, in which every pulsed channel is on.
 
 ## Server mode
 Only a process which can see the serial device may drive the hub, which leaves out remote users
@@ -107,15 +116,15 @@ usbman --serve
 ````
 The server owns the hub and runs the very same commands on behalf of its clients:
 ````
-usbman --connect 127.0.0.1:9877 --on 1 5
+usbman --connect 127.0.0.1:9877 --set 1 5
 ````
 Every option works exactly as it does locally, because the client forwards what you typed and
 the server runs the same command line. Setting `USBMAN_SERVER` gets an existing script or an
 automated agent onto a remote hub with no change at all:
 ````
 export USBMAN_SERVER=127.0.0.1:9877
-usbman --on 1 5
-USBMAN_SERVER= usbman --on 1 5   # this one goes back to the local hub
+usbman --set 1 5
+USBMAN_SERVER= usbman --set 1 5   # this one goes back to the local hub
 ````
 **There is no authentication.** The server binds the loopback interface by default, so only
 this machine can reach it; give it an address of its own only on a network you trust, since

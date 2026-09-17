@@ -290,7 +290,7 @@ def serve(endpoint=DEFAULT_ENDPOINT, argv=(), device_path=None, timeout=-1):
     # exactly the options it can honour and nothing silently does nothing.
     parser = cli.build_parser()
     args = parser.parse_args(list(argv))
-    if args.on or args.off or args.off_pulse or args.save:
+    if args.on or args.set or args.clear or args.off_pulse or args.save:
         parser.error('--serve takes no hub command, clients send those')
 
     cli.configure_logging(args.log_level)

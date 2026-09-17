@@ -168,7 +168,7 @@ This is `cusbi`'s command line syntax, not the wire protocol: all of these are r
 opcode absent from `OPCODES`, so `FP`, `RD`, `RH` and above all `CP` cannot go out by accident.
 Add an opcode there only once it has been verified against `cusbi`.
 
-`FP` would let `--on 1 5 --save` be a single command instead of `SP` followed by `WP`; it is not
+`FP` would let `--set 1 5 --save` be a single command instead of `SP` followed by `WP`; it is not
 used because one uniform `WP` at the end also covers `--off-pulse`, where the state worth saving
 only exists once the pulse is over.
 

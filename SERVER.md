@@ -28,16 +28,17 @@ response   "O <text>"   a line for the client stdout
 
 ```
 $ nc 127.0.0.1 9877
---on 1 3
+--set 1 3
 O On: 1 3 
 EXIT 0
---on 8
+--set 8
 E usage: usbman [-h] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
-E               [--on ON [ON ...]] [--off OFF [OFF ...]]
+E               [--on ON [ON ...]] [--set SET [SET ...]]
+E               [--clear CLEAR [CLEAR ...]]
 E               [--off-pulse OFF_PULSE [OFF_PULSE ...]] [--toff TOFF] [--save]
-E usbman: error: argument --on: invalid channel '8', expected 1 to 7 or 'all'
+E usbman: error: argument --set: invalid channel '8', expected 1 to 7 or 'all'
 EXIT 2
---off all
+--clear all
 O All off
 EXIT 0
 ```
@@ -46,7 +47,7 @@ Details worth knowing:
 
 - **The two streams stay apart.** The commands print their result but report every error through
   the log, and argparse writes its usage errors straight to stderr. A client which merged them
-  would add log noise to `usbman --on 1 | grep`, and the point of `USBMAN_SERVER` is that a
+  would add log noise to `usbman --set 1 | grep`, and the point of `USBMAN_SERVER` is that a
   pipeline cannot tell the difference.
 - **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space.
 - **One connection carries as many requests as you like**, so a session with `nc` is a small

@@ -31,7 +31,7 @@ change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to 
 
 
 def channel(value: str) -> str:
-    """argparse type of the `--on`, `--off` and `--off-pulse` values: a channel number or 'all'."""
+    """argparse type of every channel valued option: a channel number or 'all'."""
     if value == ALL_CHANNELS:
         return value
     if not value.isdigit() or int(value) not in CHANNELS:
@@ -42,7 +42,7 @@ def channel(value: str) -> str:
 
 
 def channel_set(values) -> set:
-    """Return the channels designated by a `--on`, `--off` or `--off-pulse` argument."""
+    """Return the channels designated by a channel valued argument."""
     if ALL_CHANNELS in values:
         return set(CHANNELS)
     return {int(value) for value in values}
@@ -91,8 +91,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--log-level', default='INFO', choices=LOG_LEVELS)
 
     channels_help = f"channel numbers, or '{ALL_CHANNELS}' for all of them"
-    parser.add_argument('--on', default=[], help=f'turn channel(s) on: {channels_help}', nargs='+', type=channel)
-    parser.add_argument('--off', default=[], help=f'turn channel(s) off: {channels_help}', nargs='+', type=channel)
+    parser.add_argument(
+        '--on',
+        default=[],
+        help=f'turn exactly these channel(s) on and every other one off: {channels_help}',
+        nargs='+',
+        type=channel,
+    )
+    parser.add_argument(
+        '--set',
+        default=[],
+        help=f'turn channel(s) on, leaving the others as they are: {channels_help}',
+        nargs='+',
+        type=channel,
+    )
+    # '--clr' is a real alias and not an abbreviation, '--clr' not being a prefix of '--clear'.
+    # It costs the abbreviations '--c' and '--cl', which become ambiguous between the two.
+    parser.add_argument(
+        '--clear',
+        '--clr',
+        default=[],
+        help=f'turn channel(s) off, leaving the others as they are: {channels_help}',
+        nargs='+',
+        type=channel,
+    )
     parser.add_argument(
         '--off-pulse', default=[], help=f'turn channel(s) off and on: {channels_help}', nargs='+', type=channel
     )
@@ -126,12 +148,18 @@ def run(argv=None, *, device_path=None, setup_logging=configure_logging):
             sys.exit(EXIT_ERROR)
         logging.info(f'Using auto detected device {device_path}')
 
-    set_on = channel_set(args.on)
-    set_off = channel_set(args.off)
-    set_off_pulse = channel_set(args.off_pulse)
-    conflicts = set.intersection(set_on, set_off)
+    exclusive = channel_set(args.on)
+    to_set = channel_set(args.set)
+    to_clear = channel_set(args.clear)
+    to_pulse = channel_set(args.off_pulse)
+    if exclusive and (to_set or to_clear or to_pulse):
+        # A pulse ends with its channels on whatever they were, so it would contradict --on
+        # just as --set and --clear do.
+        logging.error('--on cannot be combined with --set, --clear or --off-pulse, it alone decides every channel')
+        sys.exit(EXIT_ERROR)
+    conflicts = set.intersection(to_set, to_clear)
     if conflicts:
-        logging.error(f'ON and OFF arguments are conflicting for channels {conflicts}')
+        logging.error(f'--set and --clear are conflicting for channels {conflicts}')
         sys.exit(EXIT_ERROR)
 
     get_state_errors = []
@@ -152,13 +180,16 @@ def run(argv=None, *, device_path=None, setup_logging=configure_logging):
         sys.exit(EXIT_NO_COMMUNICATION)
 
     state = org_state
-    if set_on:
-        for i in set_on:
+    if exclusive:
+        # Absolute: the channels asked for and no others, whatever the hub was doing before.
+        state = 0
+        for i in exclusive:
             state |= 1 << (i - 1)
-        logging.debug(f'ON = {set_on}, state = {state:#02x}')
-    if set_off:
-        for i in set_off:
-            state &= ~(1 << (i - 1))
+        logging.debug(f'ON = {exclusive}, state = {state:#02x}')
+    for i in to_set:
+        state |= 1 << (i - 1)
+    for i in to_clear:
+        state &= ~(1 << (i - 1))
     logging.debug(f'org_state = {org_state:#02x}, state = {state:#02x}')
     if org_state != state:
         final_state = set_state(device_path, state)
@@ -167,13 +198,13 @@ def run(argv=None, *, device_path=None, setup_logging=configure_logging):
     else:
         current_state = org_state
 
-    if set_off_pulse:
-        for i in set_off_pulse:
+    if to_pulse:
+        for i in to_pulse:
             state &= ~(1 << (i - 1))
         tmp_state = set_state(device_path, state)
         logging.debug(f'tmp_state = {tmp_state:#02x}')
         time.sleep(args.toff)
-        for i in set_off_pulse:
+        for i in to_pulse:
             state |= 1 << (i - 1)
         current_state = set_state(device_path, state)
         logging.debug(f'current_state = {current_state:#02x}')

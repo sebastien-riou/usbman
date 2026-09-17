@@ -33,26 +33,65 @@ def test_state_is_reported_on_stdout(hub, routing):
 
 
 def test_every_channel_is_listed(hub, routing):
-    lines, _ = run(['--on', 'all'], routing)
+    lines, _ = run(['--set', 'all'], routing)
     out, _ = streams(lines)
     assert out == 'On: 1 2 3 4 5 6 7 \n'
 
 
 def test_trailing_space_survives_the_framing(hub, routing):
     """`print('On: ', end='')` leaves a trailing space which must reach the client."""
-    lines, _ = run(['--on', '1', '3'], routing)
+    lines, _ = run(['--set', '1', '3'], routing)
     assert 'O On: 1 3 \n' in lines
 
 
 def test_channels_are_switched(hub, routing):
-    run(['--on', 'all'], routing)
+    run(['--set', 'all'], routing)
     assert hub.state == 0x7F
-    run(['--off', '1', '4', '6', '7'], routing)
+    run(['--clear', '1', '4', '6', '7'], routing)
     assert hub.state == 0x16
 
 
+def test_on_decides_every_channel(hub, routing):
+    """Unlike --set, which only adds, --on turns everything else off."""
+    run(['--set', 'all'], routing)
+    lines, code = run(['--on', '2'], routing)
+    out, _ = streams(lines)
+    assert code == 0
+    assert out == 'On: 2 \n'
+    assert hub.state == 0b10
+
+
+def test_set_and_clear_leave_the_other_channels_alone(hub, routing):
+    run(['--on', '1', '3'], routing)
+    run(['--set', '5'], routing)
+    assert hub.state == 0b10101
+    run(['--clear', '1'], routing)
+    assert hub.state == 0b10100
+
+
+def test_clr_behaves_like_clear(hub, routing):
+    run(['--on', 'all'], routing)
+    run(['--clr', '2'], routing)
+    assert hub.state == 0x7F & ~0b10
+
+
+@pytest.mark.parametrize('rest', [['--set', '3'], ['--clear', '3'], ['--clr', '3'], ['--off-pulse', '3']])
+def test_on_refuses_to_be_combined(hub, routing, rest):
+    lines, code = run(['--on', '1', *rest], routing)
+    _, err = streams(lines)
+    assert code == -1
+    assert 'cannot be combined' in err
+    assert hub.commands == []  # refused before anything reached the hub
+
+
+def test_on_may_still_be_saved(hub, routing):
+    _, code = run(['--on', '1', '3', '--save'], routing)
+    assert code == 0
+    assert hub.saved == 0b101
+
+
 def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
-    _, code = run(['--on', '2', '3', '5', '--save'], routing)
+    _, code = run(['--set', '2', '3', '5', '--save'], routing)
     assert code == 0
     assert hub.saved == 0x16
     assert hub.commands[-1] == 'WPpass    \r'
@@ -60,7 +99,7 @@ def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
 
 def test_errors_reach_the_client_on_stderr(hub, routing):
     """They are reported through logging, so capturing the stdout alone would lose them."""
-    lines, code = run(['--on', '1', '--off', '1'], routing)
+    lines, code = run(['--set', '1', '--clear', '1'], routing)
     out, err = streams(lines)
     assert code == -1
     assert out == ''
@@ -69,7 +108,7 @@ def test_errors_reach_the_client_on_stderr(hub, routing):
 
 def test_argparse_errors_reach_the_client_too(hub, routing):
     """argparse writes straight to stderr and exits, bypassing logging entirely."""
-    lines, code = run(['--on', '8'], routing)
+    lines, code = run(['--set', '8'], routing)
     out, err = streams(lines)
     assert code == 2
     assert 'invalid channel' in err
@@ -112,7 +151,7 @@ def test_a_hub_failure_becomes_an_exit_code_not_a_crash(hub, routing, monkeypatc
         raise OSError('the port went away')
 
     monkeypatch.setattr(usbman, 'serial_command_response', broken)
-    lines, code = run(['--on', '1'], routing)
+    lines, code = run(['--set', '1'], routing)
     _, err = streams(lines)
     assert code == -2  # could not communicate, reported rather than raised
     assert 'went away' in err or 'Could not communicate' in err

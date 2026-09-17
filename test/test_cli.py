@@ -74,11 +74,11 @@ def test_decode_result_raises_when_the_hub_says_nothing():
     ('args', 'expected'),
     [
         ([], (None, None, None)),
-        (['--on', '1'], (None, None, None)),
+        (['--set', '1'], (None, None, None)),
         (['--device', '/dev/ttyUSB1'], ('/dev/ttyUSB1', None, None)),
         (['--serve'], (None, '', None)),
         (['--serve', '1.2.3.4:5'], (None, '1.2.3.4:5', None)),
-        (['--serve', '--on', '1'], (None, '', None)),  # an option cannot be the value
+        (['--serve', '--set', '1'], (None, '', None)),  # an option cannot be the value
         (['--connect', 'h:1'], (None, None, 'h:1')),
         (['--connect=h:1'], (None, None, 'h:1')),
     ],
@@ -91,10 +91,10 @@ def test_split_transport_recognises_its_options(args, expected):
 @pytest.mark.parametrize(
     ('args', 'forwarded'),
     [
-        (['--on', '1', '5'], ['--on', '1', '5']),
-        (['--connect', 'h:1', '--on', '1'], ['--on', '1']),
-        (['--on', '1', '--connect', 'h:1'], ['--on', '1']),
-        (['--timeout', '5', '--off', 'all'], ['--off', 'all']),
+        (['--set', '1', '5'], ['--set', '1', '5']),
+        (['--connect', 'h:1', '--set', '1'], ['--set', '1']),
+        (['--set', '1', '--connect', 'h:1'], ['--set', '1']),
+        (['--timeout', '5', '--clear', 'all'], ['--clear', 'all']),
         # the hub command keeps everything the transport parser does not claim
         (['--save', '--toff', '0.5', '--log-level', 'DEBUG'], ['--save', '--toff', '0.5', '--log-level', 'DEBUG']),
     ],
@@ -105,10 +105,27 @@ def test_split_transport_forwards_the_rest_untouched(args, forwarded):
 
 
 def test_split_transport_leaves_hub_abbreviations_alone():
-    """`allow_abbrev` is off there, so `--s` still reaches the hub parser as `--save`."""
-    _, argv = split_transport(['--s'])
-    assert argv == ['--s']
-    assert cli.build_parser().parse_args(argv).save is True
+    """`allow_abbrev` is off there, so `--t` reaches the hub parser as `--toff`.
+
+    The transport parser really does have a `--timeout` which would otherwise claim it.
+    """
+    _, argv = split_transport(['--t', '0.5'])
+    assert argv == ['--t', '0.5']
+    assert cli.build_parser().parse_args(argv).toff == 0.5
+
+
+def test_clr_is_an_alias_of_clear():
+    assert cli.build_parser().parse_args(['--clr', '1', '5']).clear == ['1', '5']
+
+
+@pytest.mark.parametrize('abbreviation', ['--c', '--cl', '--s'])
+def test_the_new_names_cost_some_abbreviations(abbreviation):
+    """`--c` and `--cl` match both `--clear` and `--clr`, `--s` matches `--set` and `--save`.
+
+    Pinned deliberately, so the price of the new names is recorded rather than rediscovered.
+    """
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args([abbreviation, '1'])
 
 
 def test_timeout_defaults_to_blocking_forever():
