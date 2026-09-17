@@ -223,9 +223,9 @@ def find_device_path() -> str:
         return hubs[0].path
     if hubs:
         found = ', '.join(str(hub) for hub in hubs)
-        raise RuntimeError(f'Several managed USB hubs found ({found}), use --device-path to select one')
+        raise RuntimeError(f'Several managed USB hubs found ({found}), use --device to select one')
     seen = ', '.join(str(device) for device in devices) if devices else 'none'
     raise RuntimeError(
         f'No managed USB hub found among the serial devices of the system ({seen}), '
-        f'use --device-path to specify the serial device'
+        f'use --device to specify the serial device'
     )

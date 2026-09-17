@@ -63,6 +63,10 @@ jobs:
       - name: Minimaly test
         run: |
           dist/usbman --help
+          # every error path of the frozen binary used to die on a NameError, because `exit`
+          # comes from `site` which PyInstaller does not ship. --help alone never caught it.
+          dist/usbman --device /nonexistent --on 1 --off 1 ; test $? -eq 255
+          dist/usbman --connect 127.0.0.1:1 --on 1 ; test $? -eq 255
           mv dist/usbman usbman-${{ matrix.build.platform }}
 
       - name: Upload Artifact

@@ -43,9 +43,9 @@ jobs:
     - name: Lint 
       run: |
         pipenv run ./lint
-    # - name: Test with pytest
-    #   run: |
-    #     pytest
+    - name: Test with pytest
+      run: |
+        pipenv run pytest test
     # - if: matrix.python-version == '3.12' && runner.os == 'Linux'
     #   name: Doc
     #   run: |

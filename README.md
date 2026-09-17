@@ -43,8 +43,6 @@ one:
 ````
 usbman --device /dev/ttyUSB0
 ````
-`--device` is the short form of `--device-path`, and is used throughout this file.
-
 Detection only reads USB identifiers, it never sends anything to a device, so whatever you have
 plugged into the hub is left alone. It needs Linux, and it needs your hub model to be known —
 see [AUTO-DETECT.md](AUTO-DETECT.md) if it does not find your hub.
@@ -100,6 +98,33 @@ usbman --device /dev/ttyUSB0 --save
 ````
 It applies last, after `--on`, `--off` and `--off-pulse`, so `--off-pulse ... --save` stores the
 state left by the pulse, in which every pulsed channel is on.
+
+## Server mode
+Only a process which can see the serial device may drive the hub, which leaves out remote users
+and anything running in a sandbox. `--serve` hands the command line to them over a socket:
+````
+usbman --serve
+````
+The server owns the hub and runs the very same commands on behalf of its clients:
+````
+usbman --connect 127.0.0.1:9877 --on 1 5
+````
+Every option works exactly as it does locally, because the client forwards what you typed and
+the server runs the same command line. Setting `USBMAN_SERVER` gets an existing script or an
+automated agent onto a remote hub with no change at all:
+````
+export USBMAN_SERVER=127.0.0.1:9877
+usbman --on 1 5
+USBMAN_SERVER= usbman --on 1 5   # this one goes back to the local hub
+````
+**There is no authentication.** The server binds the loopback interface by default, so only
+this machine can reach it; give it an address of its own only on a network you trust, since
+anyone who can reach the port can cut the power to whatever is plugged into the hub. To reach
+it from another machine, forward the port over ssh rather than exposing it:
+````
+ssh -L 9877:127.0.0.1:9877 the-machine-with-the-hub
+````
+[SERVER.md](SERVER.md) documents the wire protocol and the rest of the behaviour.
 
 ## Protocol
 The hub speaks 9600 8N1 on the serial control interface. A command is a two character opcode,
