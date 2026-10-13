@@ -157,6 +157,33 @@ This needs the wiring of your hub model to be known to `usbman`. If it is not, t
 so and points at `--characterize`, which works it out with a single peripheral you move from
 socket to socket; [NOTES.md](NOTES.md) describes how to add a model.
 
+### Find the /dev path to give another tool
+The other way round from `--channel-of`: name a channel and get the serial port on it, so you
+can hand it to whatever talks to the board.
+````
+$ usbman --path-of 4
+/dev/ttyACM0
+$ usbman --path-of numaker          # a nickname or a serial number names the channel too
+/dev/ttyACM0
+$ screen $(usbman --path-of numaker) 115200
+````
+`--id-path-of` answers the same question with the stable name udev builds from the device's
+manufacturer, product and serial number, which does not move when things are re-plugged:
+````
+$ usbman --id-path-of numaker
+/dev/serial/by-id/usb-Nuvoton_Nu-Link2_CMSIS-DAP_13150000000A25020450395D00000FCD-if01
+````
+That is the one to put in a script or a config file; `/dev/ttyACM0` is only true until the next
+reboot. Not every device has one, since udev needs descriptors the device may not supply, and
+`usbman` says so when that happens.
+
+One path per line for both, and only paths on standard output, so they substitute cleanly. A
+socket can hold more than one serial port — a composite board, or a hub with several boards
+behind it — in which case all of them are printed and a warning goes to standard error.
+
+The device has to be switched on to have a path at all. If the channel is off, or empty, or
+holds something which exposes no serial port, `usbman` says which of those it is.
+
 ### Give your devices names
 Serial numbers are unambiguous but unreadable. Put your own names for them in
 `~/.config/usbman/nicknames`, and use those instead:

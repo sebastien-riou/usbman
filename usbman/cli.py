@@ -4,6 +4,7 @@ import os
 import sys
 import time
 
+import usbman
 from usbman import (
     CHANNELS,
     __version__,
@@ -14,7 +15,9 @@ from usbman import (
     get_state,
     live_devices,
     read_snapshot_entries,
+    id_paths_for,
     serial_nicknames,
+    tty_paths_on_channel,
     resolve_channel,
     save_state,
     set_state,
@@ -78,11 +81,16 @@ def channel(value: str) -> str:
     return value  # a serial number, looked up later
 
 
+def one_channel(value: str) -> int:
+    """Return the channel a single value names: a channel number, or a device reference."""
+    return int(value) if is_channel_number(value) else resolve_channel(value)
+
+
 def channel_set(values) -> set:
     """Return the channels designated by a channel valued argument, resolving any reference."""
     if ALL_CHANNELS in values:
         return set(CHANNELS)
-    return {int(value) if is_channel_number(value) else resolve_channel(value) for value in values}
+    return {one_channel(value) for value in values}
 
 
 def configure_logging(level) -> None:
@@ -167,6 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
     )
     parser.add_argument(
+        '--path-of',
+        default=None,
+        metavar='CHANNEL',
+        help='print the /dev path of the serial port(s) on a channel, named by number, nickname or serial',
+        type=channel,
+    )
+    parser.add_argument(
+        '--id-path-of',
+        default=None,
+        metavar='CHANNEL',
+        help='the same, as a stable /dev/serial/by-id path which survives re-plugging',
+        type=channel,
+    )
+    parser.add_argument(
         '--list',
         action='store_true',
         help='show which device is on which channel, from the USB tree and from the snapshot',
@@ -192,6 +214,32 @@ def build_parser() -> argparse.ArgumentParser:
         '--save', action='store_true', help='store the resulting state as the one the hub powers up with'
     )
     return parser
+
+
+def print_paths(channel: int, by_id: bool = False) -> None:
+    """Print the path of every serial port on a channel, one per line.
+
+    One per line so that the usual case substitutes straight into another command. When there
+    is more than one the warning goes to stderr, leaving stdout parseable.
+    """
+    ttys = tty_paths_on_channel(channel)
+    if not ttys:
+        on_channel = [product for number, _, product in live_devices() if number == channel]
+        if on_channel:
+            raise RuntimeError(f'channel {channel} has {", ".join(on_channel)} on it, but no serial port')
+        raise RuntimeError(f'nothing is connected to channel {channel}, or the channel is switched off')
+
+    paths = id_paths_for(ttys) if by_id else ttys
+    if not paths:
+        raise RuntimeError(
+            # read through the module, so that a test pointing it elsewhere is named correctly
+            f'channel {channel} has {", ".join(ttys)}, but nothing in {usbman.SERIAL_BY_ID} points there: '
+            f'the device does not give udev the descriptors it names these after'
+        )
+    if len(paths) > 1:
+        logging.warning(f'channel {channel} has {len(paths)} serial ports, listing all of them')
+    for path in paths:
+        print(path)
 
 
 def print_listing(live, snapshot) -> None:
@@ -316,6 +364,15 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
         names = ', '.join(f'--{name}' for name in local_only)
         logging.error(f'{names} acts on the machine the hub is attached to, it cannot be asked for from here')
         sys.exit(EXIT_ERROR)
+
+    for option, reference in (('--path-of', args.path_of), ('--id-path-of', args.id_path_of)):
+        if reference is None:
+            continue
+        if reference == ALL_CHANNELS:
+            logging.error(f'{option} takes one channel, not {ALL_CHANNELS!r}')
+            sys.exit(EXIT_ERROR)
+        print_paths(one_channel(reference), by_id=option == '--id-path-of')
+        return
 
     if args.list:
         print_listing(live_devices(), read_snapshot_entries())

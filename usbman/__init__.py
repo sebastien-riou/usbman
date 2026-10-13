@@ -110,6 +110,10 @@ USBMAN_DIR_ENV = 'USBMAN_DIR'
 TTY_SYSFS = '/sys/class/tty'
 USB_SYSFS = '/sys/bus/usb/devices'
 
+# Where udev keeps the stable names of the serial ports. Unlike a `/dev/ttyACM0`, these are
+# made of the manufacturer, product and serial number, so they survive re-plugging.
+SERIAL_BY_ID = '/dev/serial/by-id'
+
 # USB ids of the hubs known to embed a managed control interface.
 # The managed hub appears as one or several plain USB hubs; the control interface is a serial
 # chip wired to one of their downstream ports. `lsusb` reports these ids, and `usbman
@@ -719,6 +723,45 @@ def read_attribute(node: str, name: str) -> str | None:
             return f.read().strip()
     except OSError:
         return None
+
+
+def tty_paths_on_channel(channel: int) -> list:
+    """Return the `/dev` paths of the serial ports the given channel powers.
+
+    More than one is possible and normal: a composite board can expose several, and a socket
+    may hold a hub with several boards behind it. Only devices which are on and enumerated
+    have a path at all.
+    """
+    paths = []
+    for name in sorted(os.listdir(TTY_SYSFS)):
+        node = usb_device_node(os.path.join(TTY_SYSFS, name, 'device'))
+        if node is None:
+            continue
+        try:
+            if channel_of_node(node) == channel:
+                paths.append(os.path.join('/dev', name))
+        except RuntimeError:
+            continue  # not behind a managed hub, or on a port no channel switches
+    return paths
+
+
+def id_paths_for(tty_paths) -> list:
+    """Return the `/dev/serial/by-id` names which point at the given `/dev` paths.
+
+    A port can be missing from here: udev builds these names out of the USB descriptors, and a
+    device which does not supply them gets no entry.
+    """
+    wanted = {os.path.basename(path) for path in tty_paths}
+    paths = []
+    try:
+        names = sorted(os.listdir(SERIAL_BY_ID))
+    except OSError:
+        return []  # no USB serial device has ever been seen, so the directory is not there
+    for name in names:
+        link = os.path.join(SERIAL_BY_ID, name)
+        if os.path.basename(os.path.realpath(link)) in wanted:
+            paths.append(link)
+    return paths
 
 
 def live_devices() -> list:

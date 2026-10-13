@@ -290,7 +290,8 @@ def serve(endpoint=DEFAULT_ENDPOINT, argv=(), device_path=None, timeout=-1):
     # exactly the options it can honour and nothing silently does nothing.
     parser = cli.build_parser()
     args = parser.parse_args(list(argv))
-    commands = ('on', 'set', 'clear', 'off_pulse', 'save', 'channel_of', 'list', 'snapshot', 'forget', 'characterize')
+    commands = ('on', 'set', 'clear', 'off_pulse', 'save', 'channel_of', 'path_of', 'id_path_of')
+    commands += ('list', 'snapshot', 'forget', 'characterize')
     if any(getattr(args, name) for name in commands):
         parser.error('--serve takes no hub command, clients send those')
 

@@ -34,7 +34,12 @@ TTYS = {
     'ttyACM9': '3',  # not behind a managed hub at all
 }
 
-BY_ID = {'usb-STMicroelectronics_STLINK-V3_004B00283532510831333430-if01': 'ttyACM0'}
+# udev names these after the manufacturer, product and serial number. ttyUSB0 deliberately has
+# none, because a device without the right descriptors really does end up with no entry here.
+BY_ID = {
+    'usb-STMicroelectronics_STLINK-V3_004B00283532510831333430-if01': 'ttyACM0',
+    'usb-FTDI_TTL-234X-3V3_FT1234XZ-if00-port0': 'ttyUSB1',
+}
 
 
 def node_name(devpath):

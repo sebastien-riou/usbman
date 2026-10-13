@@ -55,6 +55,7 @@ def sysfs(tmp_path, monkeypatch):
     tty_sysfs, usb_sysfs, dev = fakesysfs.build(str(tmp_path))
     monkeypatch.setattr(usbman, 'TTY_SYSFS', tty_sysfs)
     monkeypatch.setattr(usbman, 'USB_SYSFS', usb_sysfs)
+    monkeypatch.setattr(usbman, 'SERIAL_BY_ID', os.path.join(dev, 'serial', 'by-id'))
     monkeypatch.setattr(usbman, 'CHANNEL_PORTS', FAKE_CHANNEL_PORTS)
     # No test may touch the real snapshot, so point it into the temporary directory too.
     monkeypatch.setenv(usbman.USBMAN_DIR_ENV, str(tmp_path))
