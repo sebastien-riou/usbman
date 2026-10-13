@@ -113,24 +113,30 @@ Anywhere a channel number is accepted, you can instead name a device plugged int
 let `usbman` work out which channel powers it:
 ````
 usbman --off-pulse /dev/ttyACM0                       # power cycle whatever that board is
+usbman --off-pulse myboard                            # the same board, by the name you gave it
 usbman --channel-of /dev/ttyACM0                      # just print the channel
 usbman --clear /dev/ttyACM0 3                         # mixed with plain channel numbers
 ````
-Three ways to name a device, all equivalent:
+Four ways to name a device, all equivalent:
 
 | Form | Example |
 | --- | --- |
+| a nickname you chose | `myboard`, see [below](#give-your-devices-names) |
 | a device path | `/dev/ttyACM0` |
 | a symlink to one | `/dev/serial/by-id/usb-STMicroelectronics_STLINK-V3_004B0028...-if01` |
 | a USB serial number | `004B00283532510831333430` |
 
-The serial number is usually the one you want in a script: `ttyACM0` is handed out in
+A **nickname** is the one to reach for day to day: you choose it, it is short, and it keeps
+working when the board is unplugged and plugged back in. It stands for a serial number, so
+everything said below about serial numbers applies to it too.
+
+Of the rest, the **serial number** is the one to use in a script: `ttyACM0` is handed out in
 enumeration order and moves when you re-plug things, while the serial does not, and a serial
 names a device even when it exposes no serial port at all. `lsusb -v` and the names under
 `/dev/serial/by-id/` both show it.
 
-A token of up to three digits is read as a channel number and anything longer as a serial, so
-`--clear 3` is channel 3 while `--clear 000000000` is a serial number.
+A token of up to three digits is read as a channel number and anything longer as a nickname or
+a serial, so `--clear 3` is channel 3 while `--clear 000000000` is a serial number.
 
 Two things to expect:
 
@@ -151,12 +157,12 @@ Serial numbers are unambiguous but unreadable. Put your own names for them in
 # ~/.config/usbman/nicknames
 # nickname   serial
 numaker      0005000C3338511034333935
-stlink       004B00283532510831333430
+myboard      004B00283532510831333430
 pico         648326155B4B110B
 ````
 ````
 usbman --off-pulse numaker        # power cycle the Numaker board
-usbman --on stlink pico           # those two on, everything else off
+usbman --on myboard pico          # those two on, everything else off
 usbman --channel-of numaker
 ````
 A nickname can be used anywhere a channel number can, and it works for a device which is
@@ -185,7 +191,7 @@ usbman --set 004B00283532510831333430     # and comes back, by name
 ````
 $ usbman --list
 channel  nickname  source    serial                    device
-1        stlink    live      004B00283532510831333430  STLINK-V3
+1        myboard   live      004B00283532510831333430  STLINK-V3
 1        -         live      -                         USB2.1 Hub
 2        -         -         -                         -
 5        pico      live      648326155B4B110B          Pico
