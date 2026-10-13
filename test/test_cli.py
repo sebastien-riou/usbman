@@ -181,6 +181,19 @@ def test_peek_log_level(argv, level):
     assert peek_log_level(argv) == level
 
 
+def test_version_prints_and_exits_cleanly(capsys):
+    with pytest.raises(SystemExit) as finished:
+        cli.build_parser().parse_args(['--version'])
+    assert finished.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith('usbman ')
+    assert out.split()[1]  # a version of some sort, 'unknown' when run from a source tree
+
+
+def test_the_version_is_the_one_the_package_reports():
+    assert cli.__version__ == usbman.__version__
+
+
 def test_help_mentions_the_transport_options():
     """They are not in the parser, so only the epilog can tell the user they exist."""
     text = cli.build_parser().format_help()

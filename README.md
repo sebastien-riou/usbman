@@ -47,6 +47,13 @@ Detection only reads USB identifiers, it never sends anything to a device, so wh
 plugged into the hub is left alone. It needs Linux, and it needs your hub model to be known —
 see [AUTO-DETECT.md](AUTO-DETECT.md) if it does not find your hub.
 
+### Check the version
+````
+usbman --version
+````
+Through `--connect` this reports the version of the server, which is the one actually driving
+the hub.
+
 ### Display the current state
 This list the channels which are ON:
 ````

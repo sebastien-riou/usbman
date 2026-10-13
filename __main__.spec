@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import copy_metadata
 
+# Without the package metadata, `importlib.metadata.version` finds nothing in the frozen
+# binary and `--version` can only answer "unknown", which is the one build where the version
+# matters most.
 a = Analysis(
     ['usbman/__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=copy_metadata('usbman'),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

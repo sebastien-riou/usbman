@@ -1,3 +1,4 @@
+import importlib.metadata
 import logging
 import os
 import time
@@ -6,6 +7,13 @@ from typing import NamedTuple
 from serial.tools import list_ports
 
 from usbman.clicom import serial_command_response
+
+try:
+    __version__ = importlib.metadata.version('usbman')
+except importlib.metadata.PackageNotFoundError:
+    # Run straight from a source tree, never installed, so there is no metadata to read. The
+    # frozen binary carries it: see `copy_metadata` in __main__.spec.
+    __version__ = 'unknown'
 
 # The 8 character password field every write command carries. This is the factory default of
 # the hubs; the `CP` command changes it, see `OPCODES` below.

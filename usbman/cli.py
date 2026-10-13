@@ -6,6 +6,7 @@ import time
 
 from usbman import (
     CHANNELS,
+    __version__,
     capture_snapshot,
     channel_ports_table,
     characterize_hub,
@@ -125,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         'usbman', epilog=TRANSPORT_HELP, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--log-level', default='INFO', choices=LOG_LEVELS)
+    # Through --connect this reports the server's version, as every forwarded option reports
+    # the server's answer. That is the useful one: it says what is really driving the hub.
+    parser.add_argument('--version', action='version', version=f'usbman {__version__}')
 
     channels_help = f"channel numbers, or '{ALL_CHANNELS}' for all of them"
     parser.add_argument(
