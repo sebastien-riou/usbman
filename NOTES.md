@@ -85,8 +85,82 @@ Channel states are carried internally by `cusbi` as an `unsigned long long` (`st
 `usbman` sets bit 7 of byte 0 on every write (`state |= 0x80`) and masks it off on every read
 (`state &= 0x7F`). Given the encoding above, **that bit is channel 8**, not a flag: on a 7-port
 hub `usbman` is asking for a channel that does not exist, and hiding a channel that would exist
-on a bigger one. Harmless here, wrong on a 14- or 28-port model. The trailing `FFFFFF` that
+on a bigger one. Characterizing the hub found nothing on it, which is consistent with there
+being no eighth channel rather than with the bit meaning something. Harmless here, wrong on a 14- or 28-port model. The trailing `FFFFFF` that
 `usbman` sends is, by the same token, not a mystery register — it is channels 9 to 32, all on.
+
+## Which port each channel switches
+
+Channel *n* is wired to one downstream port of one of the hub's sections. That wiring is inside
+the hub, so it is the same on every unit of a model, independent of what is plugged in, and it
+belongs in `CHANNEL_PORTS` in [usbman/\_\_init\_\_.py](usbman/__init__.py) rather than in anyone's
+configuration. It is what lets `usbman --channel-of /dev/ttyACM0` work: the USB tree says which
+port a device hangs on, and this table says which channel switches that port.
+
+### StarTech 7 ports (`14b0:044a` + `14b0:044c`)
+
+**Verified** with `--characterize` on a real hub, one peripheral moved through every socket:
+
+| Socket on the case | Channel | Hub section | Port |
+| --- | --- | --- | --- |
+| 1 | 1 | `14b0:044a` | 1 |
+| 2 | 2 | `14b0:044a` | 2 |
+| 3 | 3 | `14b0:044a` | 3 |
+| 4 | 4 | `14b0:044c` | 1 |
+| 5 | 5 | `14b0:044c` | 2 |
+| 6 | 6 | `14b0:044c` | 3 |
+| 7 | — | — | nothing enumerated, see below |
+
+Regular throughout: the sockets are numbered as the channels are, three to a section in order,
+and the remaining port of each section is taken by the hub itself — port 4 of `14b0:044a`
+cascades to `14b0:044c`, and port 4 of `14b0:044c` is the control interface.
+
+### The seventh socket
+
+This settles the count the port inspection could not. Six sockets carry data and the hub uses
+the other two ports of its two four-port sections for itself, which is why only six appear on
+the USB tree while the state byte has seven bits.
+
+**Inferred**: socket 7 is powered but has no data lines — a charge-only port, which these hubs
+commonly have. Channel 7 would then switch its power with nothing ever enumerating there, which
+is exactly what was seen: plugging a peripheral into socket 7 made no port appear anywhere, and
+cutting channel 7 emptied nothing. Not **verified**: a USB power meter in socket 7 while
+toggling channel 7, or the vendor's own description of the port, would settle it.
+
+Until it is, `usbman --channel-of` cannot name anything in socket 7, but `--set 7` and
+`--clear 7` switch it like any other channel.
+
+### Measuring it, to add a hub model
+
+`usbman --characterize` is for this and nothing else — nobody needs it to *use* usbman. It asks
+you to plug **one peripheral** into each socket of the hub in turn, and for each one works out
+which channel switches it:
+
+```
+$ usbman --characterize
+Plug the peripheral into the socket labelled 1 on the hub, then press Enter (s to skip this socket, q to stop):
+socket 1 is channel 3, port 1 of hub 14b0:044a
+Plug the peripheral into the socket labelled 2 on the hub, then press Enter (s to skip this socket, q to stop):
+...
+```
+
+Any peripheral will do, so long as you can tell when it has finished enumerating. One at a time
+is what makes this reliable: there is only ever one port to watch appear and disappear, so
+nothing else on the hub can be mistaken for it.
+
+How it decides, per socket: it notes which ports are occupied **before** you plug anything in,
+waits for a port which was not there to appear, then cuts one channel at a time until that port
+empties. Waiting for the port to *appear* rather than waiting a fixed time is what copes with a
+board slow to enumerate — a Numaker M5531 takes several seconds where an ST-LINK takes one. If
+a socket is reported as not identified although something is plugged into it, raise `--settle`
+(5 seconds by default) and try again.
+
+It needs a terminal, since it has to ask you to move the peripheral, so it cannot be run down a
+pipe or sent to a `usbman` server. It restores the channel states it found when it finishes.
+
+When it is done it prints the table to paste into `CHANNEL_PORTS`. Then make the three edits
+that adding a model consists of: the numbers in `CHANNEL_PORTS`, the table above with its hub
+ids, and whatever the run settles about the open question below.
 
 ## Replies
 
@@ -174,6 +248,10 @@ only exists once the pulse is over.
 
 ## Open questions
 
+- Whether socket 7 of the StarTech is really a charge-only port, as inferred above. That is
+  the last piece of the six-versus-seven question.
+- Which port each channel switches on any model other than the StarTech. The procedure is
+  `--characterize`; nobody has run it on a Coolgear hub.
 - The field layout of the `?Q` reply (port count, firmware version).
 - Error codes other than `E01`, and what exactly provokes `EFF`.
 - Whether the payload may be longer than 4 bytes. `cusbi` has a

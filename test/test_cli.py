@@ -14,10 +14,33 @@ def test_channel_accepts_numbers_and_all():
     assert cli.channel('all') == 'all'
 
 
-@pytest.mark.parametrize('value', ['0', '8', 'ALL', 'foo', '-1', '1.5', ''])
-def test_channel_rejects_the_rest(value):
+@pytest.mark.parametrize('value', ['0', '8', '12', '123', ''])
+def test_channel_rejects_bad_channel_numbers(value):
+    """Short digit runs are channel numbers, so a typo says so instead of becoming a serial."""
     with pytest.raises(argparse.ArgumentTypeError):
         cli.channel(value)
+
+
+@pytest.mark.parametrize(
+    ('value', 'is_number'),
+    [
+        ('7', True),
+        ('123', True),  # a channel number, out of range, caught as such
+        ('1234', False),  # four digits: a serial, which is how 000000000 can be named
+        ('000000000', False),
+        ('B001DNH6', False),
+        ('/dev/ttyACM0', False),
+        ('all', False),
+    ],
+)
+def test_the_four_digit_boundary(value, is_number):
+    assert cli.is_channel_number(value) is is_number
+
+
+@pytest.mark.parametrize('value', ['all', '/dev/ttyACM0', '/dev/serial/by-id/usb-x', 'B001DNH6', '1234', '000000000'])
+def test_channel_accepts_references_without_resolving_them(value):
+    """`channel()` checks the shape only: resolution needs sysfs and the configured logging."""
+    assert cli.channel(value) == value
 
 
 def test_channel_set_expands_all():

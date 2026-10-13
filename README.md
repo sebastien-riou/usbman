@@ -108,6 +108,139 @@ usbman --device /dev/ttyUSB0 --save
 It applies last, after the channel options, so `--off-pulse ... --save` stores the state left by
 the pulse, in which every pulsed channel is on.
 
+### Name a device instead of a channel
+Anywhere a channel number is accepted, you can instead name a device plugged into the hub and
+let `usbman` work out which channel powers it:
+````
+usbman --off-pulse /dev/ttyACM0                       # power cycle whatever that board is
+usbman --channel-of /dev/ttyACM0                      # just print the channel
+usbman --clear /dev/ttyACM0 3                         # mixed with plain channel numbers
+````
+Three ways to name a device, all equivalent:
+
+| Form | Example |
+| --- | --- |
+| a device path | `/dev/ttyACM0` |
+| a symlink to one | `/dev/serial/by-id/usb-STMicroelectronics_STLINK-V3_004B0028...-if01` |
+| a USB serial number | `004B00283532510831333430` |
+
+The serial number is usually the one you want in a script: `ttyACM0` is handed out in
+enumeration order and moves when you re-plug things, while the serial does not, and a serial
+names a device even when it exposes no serial port at all. `lsusb -v` and the names under
+`/dev/serial/by-id/` both show it.
+
+A token of up to three digits is read as a channel number and anything longer as a serial, so
+`--clear 3` is channel 3 while `--clear 000000000` is a serial number.
+
+Two things to expect:
+
+- **A channel powers a whole socket.** If you plugged a hub into the managed hub, cycling any
+  device behind it cycles all of them, because the hub can only switch its own socket.
+- **Serial numbers are not unique.** Both sections of the StarTech hub report `000000000`, and
+  cheap devices often share one too. If a serial matches more than one device, `usbman` refuses
+  and lists them rather than guessing; name the one you mean by its path.
+
+This needs the wiring of your hub model to be known to `usbman`. If it is not, the error says
+so and points at `--characterize`, which works it out with a single peripheral you move from
+socket to socket; [NOTES.md](NOTES.md) describes how to add a model.
+
+### Give your devices names
+Serial numbers are unambiguous but unreadable. Put your own names for them in
+`~/.config/usbman/nicknames`, and use those instead:
+````
+# ~/.config/usbman/nicknames
+# nickname   serial
+numaker      0005000C3338511034333935
+stlink       004B00283532510831333430
+pico         648326155B4B110B
+````
+````
+usbman --off-pulse numaker        # power cycle the Numaker board
+usbman --on stlink pico           # those two on, everything else off
+usbman --channel-of numaker
+````
+A nickname can be used anywhere a channel number can, and it works for a device which is
+switched off exactly as its serial number does, through the snapshot below.
+
+**The file is yours**: usbman only ever reads it, so there are no commands to manage it — write
+it with a text editor. Everything after a `#` is a comment. A nickname shaped like a channel number,
+like `3`, or like `all` or a path is reported and ignored, because those are read as what they
+look like long before nicknames are considered. Several names for one device are fine.
+
+### Name a device which is switched off
+Resolving a device means finding it on the USB tree, and a device on a channel which is off is
+not there to be found. `--snapshot` records where everything is while it is still on, so you
+can name it afterwards:
+````
+usbman --on all        # everything up, so everything can be seen
+usbman --snapshot      # remember which channel each device is on
+````
+From then on a device can be named even while it is off, which is what lets you switch it back
+on by name:
+````
+usbman --clear 004B00283532510831333430   # the board goes away
+usbman --set 004B00283532510831333430     # and comes back, by name
+````
+`--list` shows what is on each channel, from the USB tree and from the snapshot together:
+````
+$ usbman --list
+channel  nickname  source    serial                    device
+1        stlink    live      004B00283532510831333430  STLINK-V3
+1        -         live      -                         USB2.1 Hub
+2        -         -         -                         -
+5        pico      live      648326155B4B110B          Pico
+6        numaker   snapshot  0005000C3338511034333935  Numaker M5531
+7        -         live      B001DNH6                  FT232R USB UART
+````
+`live` is what is connected now, `snapshot` is what the file remembers about a device which is
+not. A device seen now is listed once, where it actually is; if the snapshot disagrees, the
+listing says so and tells you to take a new one. The nickname column shows the name you gave
+the device in your nicknames file.
+
+`--forget` deletes the snapshot.
+
+Two things to know:
+
+- **Only a serial number survives being switched off**, not a path: `/dev/ttyACM0` does not
+  exist while the device is off, and the snapshot is keyed by serial. Use serials for anything
+  you intend to switch on.
+- **What is really connected always wins.** The snapshot is consulted only when the device
+  cannot be found at all, so moving a board to another socket does not need a new snapshot —
+  but a board which is *off* and has been moved will resolve to where it used to be, so take a
+  new snapshot after rearranging things.
+
+The snapshot is a plain text file at `~/.local/state/usbman/snapshot`, one channel and serial number
+per line, which you can read or edit yourself:
+````
+# usbman snapshot, 2026-10-12T15:52:03
+# channel  serial                            device
+1          B001DNH6                          # FT232R USB UART
+4          004B00283532510831333430          # STLINK-V3
+````
+`--snapshot` replaces it, so it reports which channels it saw nothing on rather than dropping
+them quietly.
+
+### Where the files are
+
+| File | Written by | Looked for in |
+| --- | --- | --- |
+| `nicknames` | you | `~/.config/usbman/`, then `~/.local/state/usbman/` |
+| `snapshot` | `--snapshot` | `~/.local/state/usbman/` |
+
+The nicknames are looked for in two places so that both habits work: `~/.config` is where a
+file you write belongs, and is used if it is there, while `~/.local/state` keeps both usbman
+files together if you would rather only remember one directory. Put it in whichever you prefer
+— if you somehow end up with both, the `~/.config` one is used and the other is reported as
+ignored.
+
+Those are the XDG defaults, so `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` are honoured if you
+have set them, and `USBMAN_DIR` overrides everything and puts both files in one directory of
+your choosing.
+
+`--snapshot`, `--forget` and `--characterize` all act on the machine the hub is attached to, so
+a client cannot ask a `usbman` server for them. Resolving a device *is* available remotely: the
+server answers from its own USB tree and its own snapshot.
+
 ## Server mode
 Only a process which can see the serial device may drive the hub, which leaves out remote users
 and anything running in a sandbox. `--serve` hands the command line to them over a socket:

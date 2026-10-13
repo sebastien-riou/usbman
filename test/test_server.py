@@ -121,6 +121,21 @@ def test_device_cannot_be_given_to_a_client(server):
     assert '--device cannot be used with --connect' in result.stderr
 
 
+def test_channel_of_resolves_on_the_server(server):
+    """The devices and the hub are both on the server, so it must resolve there, not here."""
+    result = run_usbman(['--connect', f'127.0.0.1:{server}', '--channel-of', 'NOSUCHSERIAL'])
+    assert result.returncode == 255
+    assert "serial number 'NOSUCHSERIAL'" in result.stderr
+
+
+@pytest.mark.parametrize('option', ['--snapshot', '--forget'])
+def test_the_local_only_options_are_refused_over_the_socket(server, option):
+    """They write to the machine the hub is on, so a client must not be able to ask for them."""
+    result = run_usbman(['--connect', f'127.0.0.1:{server}', option])
+    assert result.returncode == 255
+    assert 'acts on the machine the hub is attached to' in result.stderr
+
+
 def test_an_unreachable_server_is_reported_without_a_traceback(free_port):
     result = run_usbman(['--connect', f'127.0.0.1:{free_port}', '--set', '1'])
     assert result.returncode == 255

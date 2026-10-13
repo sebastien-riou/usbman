@@ -219,7 +219,7 @@ def execute_request(argv, device_path, emit, routing):
     """Run one hub command, stream its output to `emit`, and return its exit code."""
     with LOCK, routing.capture(emit):
         try:
-            cli.run(argv, device_path=device_path, setup_logging=routing.level_filter.set_level)
+            cli.run(argv, device_path=device_path, local=False, setup_logging=routing.level_filter.set_level)
         except SystemExit as e:  # argparse and every error path of the command line
             if e.code is None:
                 return 0
@@ -290,7 +290,8 @@ def serve(endpoint=DEFAULT_ENDPOINT, argv=(), device_path=None, timeout=-1):
     # exactly the options it can honour and nothing silently does nothing.
     parser = cli.build_parser()
     args = parser.parse_args(list(argv))
-    if args.on or args.set or args.clear or args.off_pulse or args.save:
+    commands = ('on', 'set', 'clear', 'off_pulse', 'save', 'channel_of', 'list', 'snapshot', 'forget', 'characterize')
+    if any(getattr(args, name) for name in commands):
         parser.error('--serve takes no hub command, clients send those')
 
     cli.configure_logging(args.log_level)

@@ -90,6 +90,41 @@ def test_on_may_still_be_saved(hub, routing):
     assert hub.saved == 0b101
 
 
+def test_channel_of_prints_the_channel(hub, routing, sysfs):
+    lines, code = run(['--channel-of', '004B00283532510831333430'], routing)
+    out, _ = streams(lines)
+    assert code == 0
+    assert out == '1\n'
+
+
+def test_channel_of_needs_no_hub(hub, routing, sysfs):
+    """It reads sysfs only, so it answers with no device path and nothing to detect."""
+    lines, code = run(['--channel-of', sysfs.path('ttyACM0')], routing, device_path=None)
+    out, _ = streams(lines)
+    assert (code, out) == (0, '1\n')
+    assert hub.commands == []
+
+
+def test_a_device_reference_works_wherever_a_channel_does(hub, routing, sysfs):
+    run(['--on', 'all'], routing)
+    run(['--clear', sysfs.path('ttyACM0')], routing)
+    assert hub.state == 0x7F & ~0b1  # the ST-LINK is on channel 1
+
+
+def test_references_and_numbers_mix(hub, routing, sysfs):
+    run(['--on', 'all'], routing)
+    run(['--clear', '004B00283532510831333430', '3'], routing)
+    assert hub.state == 0x7F & ~0b101
+
+
+def test_an_unresolvable_reference_is_reported(hub, routing, sysfs):
+    lines, code = run(['--clear', 'NOSUCH'], routing)
+    _, err = streams(lines)
+    assert code == -1
+    assert 'NOSUCH' in err
+    assert hub.commands == []  # refused before anything reached the hub
+
+
 def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
     _, code = run(['--set', '2', '3', '5', '--save'], routing)
     assert code == 0

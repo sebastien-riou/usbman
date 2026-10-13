@@ -99,6 +99,19 @@ startup, the server refuses to start rather than accepting clients it cannot ser
 `--device` is rejected on a client: the server owns the hub, and accepting it would let
 `--connect somewhere --device /dev/ttyUSB1` look as though it had worked on a different hub.
 
+## What a client may not ask for
+
+`--snapshot`, `--forget` and `--characterize` act on the machine the hub is attached to — they
+write a file there, or ask someone standing at the hub to move a peripheral — so a request
+carrying any of them is refused. The server tells `run()` that the request did not originate
+locally and it declines.
+
+Resolving a device is *not* local: a client naming a device by path or serial number is answered
+from the server's USB tree and, failing that, the server's snapshot. That is the right way
+round, since the devices and the hub are both on the server's machine. So
+`usbman --connect … --set 004B0028…` switches on a board which is currently off, while
+`usbman --connect … --snapshot` is refused.
+
 ## Security
 
 There is none. Anyone who can open the port can switch the channels, which for a managed hub

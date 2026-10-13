@@ -4,10 +4,32 @@ import os
 import sys
 import time
 
-from usbman import CHANNELS, find_device_path, get_state, save_state, set_state
+from usbman import (
+    CHANNEL_PORTS,
+    CHANNELS,
+    capture_snapshot,
+    channel_ports_table,
+    characterize_hub,
+    find_device_path,
+    get_state,
+    live_devices,
+    read_snapshot_entries,
+    serial_nicknames,
+    resolve_channel,
+    save_state,
+    set_state,
+    snapshot_path,
+    usb_id_str,
+    write_snapshot,
+)
 
 # Accepted in place of a channel number to designate every channel of the hub at once.
 ALL_CHANNELS = 'all'
+
+# A run of up to this many digits is a channel number; a longer one is a USB serial number.
+# The boundary is what lets an all digit serial such as '000000000' be named directly, while
+# keeping the common typo `--set 8` an invalid channel rather than a serial nobody has.
+CHANNEL_NUMBER_DIGITS = 3
 
 LOG_FORMAT = '%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s'
 LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
@@ -30,22 +52,37 @@ The USBMAN_SERVER environment variable acts as --connect, so an existing script 
 change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to local."""
 
 
+def is_channel_number(value: str) -> bool:
+    """Tell whether a token is meant as a channel number rather than a device reference."""
+    return value.isdigit() and len(value) <= CHANNEL_NUMBER_DIGITS
+
+
 def channel(value: str) -> str:
-    """argparse type of every channel valued option: a channel number or 'all'."""
-    if value == ALL_CHANNELS:
+    """argparse type of every channel valued option.
+
+    Accepts a channel number, `all`, or a device reference: a path such as `/dev/ttyACM0`, a
+    symlink to one such as the entries of `/dev/serial/by-id`, or a USB serial number. Only the
+    shape is checked here. Resolving a reference reads sysfs and can fail, and an argparse type
+    runs before the logging is configured, so `channel_set` does that instead.
+    """
+    if value == ALL_CHANNELS or value.startswith('/'):
         return value
-    if not value.isdigit() or int(value) not in CHANNELS:
-        raise argparse.ArgumentTypeError(
-            f"invalid channel '{value}', expected {CHANNELS[0]} to {CHANNELS[-1]} or '{ALL_CHANNELS}'"
-        )
-    return value
+    if is_channel_number(value):
+        if int(value) not in CHANNELS:
+            raise argparse.ArgumentTypeError(
+                f"invalid channel '{value}', expected {CHANNELS[0]} to {CHANNELS[-1]} or '{ALL_CHANNELS}'"
+            )
+        return value
+    if not value:
+        raise argparse.ArgumentTypeError('expected a channel number, a device path or a USB serial number')
+    return value  # a serial number, looked up later
 
 
 def channel_set(values) -> set:
-    """Return the channels designated by a channel valued argument."""
+    """Return the channels designated by a channel valued argument, resolving any reference."""
     if ALL_CHANNELS in values:
         return set(CHANNELS)
-    return {int(value) for value in values}
+    return {int(value) if is_channel_number(value) else resolve_channel(value) for value in values}
 
 
 def configure_logging(level) -> None:
@@ -120,13 +157,142 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
     parser.add_argument(
+        '--channel-of',
+        default=None,
+        metavar='DEVICE',
+        help='print the channel powering a device, named by path or USB serial number, and exit',
+        type=str,
+    )
+    parser.add_argument(
+        '--list',
+        action='store_true',
+        help='show which device is on which channel, from the USB tree and from the snapshot',
+    )
+    parser.add_argument(
+        '--snapshot',
+        action='store_true',
+        help='record which channel each connected device is on, so it can be named while switched off',
+    )
+    parser.add_argument('--forget', action='store_true', help='delete the snapshot')
+    parser.add_argument(
+        '--characterize',
+        action='store_true',
+        help='work out the wiring of a hub model, to add it to usbman (see NOTES.md), needs a terminal',
+    )
+    parser.add_argument(
+        '--settle',
+        default=5.0,
+        help='seconds --characterize allows a peripheral to enumerate; raise it for a slow board',
+        type=float,
+    )
+    parser.add_argument(
         '--save', action='store_true', help='store the resulting state as the one the hub powers up with'
     )
     return parser
 
 
-def run(argv=None, *, device_path=None, setup_logging=configure_logging):
+def print_listing(live, snapshot) -> None:
+    """Show every channel, what is on it, and whether that is what is there or what was.
+
+    The live tree overrides the snapshot the same way resolving a device does: a serial seen
+    now is reported where it now is, and its snapshot line is left out. A snapshot line which
+    disagrees with the tree is worth saying out loud, since it means the file is stale.
+    """
+    seen = {serial: channel for channel, serial, _ in live if serial is not None}
+    rows = [(channel, 'live', serial, product) for channel, serial, product in live]
+    rows += [
+        (channel, 'snapshot', serial, product)
+        for channel, serial, product in snapshot
+        if serial not in seen  # the tree wins, so a device seen now is only listed once
+    ]
+
+    nicknames = serial_nicknames()
+    serial_width = max((len(serial) for _, _, serial, _ in rows if serial), default=6)
+    nick_width = max([len(nick) for nick in nicknames.values()] + [len('nickname')])
+    header = f'{"channel":<9}{"nickname":<{nick_width + 2}}{"source":<10}{"serial":<{serial_width + 2}}device'
+    print(header)
+    for channel in CHANNELS:
+        # a device with no serial sorts as empty rather than blowing up against a string
+        on_channel = sorted((row for row in rows if row[0] == channel), key=lambda row: (row[1], row[2] or ''))
+        if not on_channel:
+            print(f'{channel:<9}{"-":<{nick_width + 2}}{"-":<10}{"-":<{serial_width + 2}}-')
+        for _, source, serial, product in on_channel:
+            nickname = nicknames.get(serial, '-')
+            print(
+                f'{channel:<9}{nickname:<{nick_width + 2}}{source:<10}{serial or "-":<{serial_width + 2}}{product}'
+            )
+
+    stale = [
+        (serial, channel, seen[serial]) for channel, serial, _ in snapshot if serial in seen and seen[serial] != channel
+    ]
+    for serial, remembered, really in stale:
+        print(f'{serial} has moved: the snapshot says channel {remembered}, it is on {really}')
+    if stale:
+        print('Run `usbman --snapshot` to bring the file up to date.')
+
+
+def print_snapshot(entries, unnamed: int) -> None:
+    """Write the snapshot and say what went into it, and what did not.
+
+    It replaces whatever was there, so being loud about the channels nothing was seen on is
+    what stops a forgotten `usbman --on all` from quietly throwing entries away.
+    """
+    path = write_snapshot(entries)
+    recorded = sorted({channel for channel, _, _ in entries})
+    print(f'Recorded {len(entries)} device(s) on channel(s) {recorded or "none"} in {path}')
+    missing = [channel for channel in CHANNELS if channel not in recorded]
+    if missing:
+        print(
+            f'Channel(s) {missing} had nothing visible: if something is plugged into them, '
+            f'turn them on, wait for them to come up, and snapshot again.'
+        )
+    if unnamed:
+        print(f'{unnamed} device(s) were skipped for having no serial number, they cannot be named.')
+
+
+def socket_prompt(label: int) -> str:
+    """Ask for the peripheral to be moved to one socket. Returns 'go', 'skip' or 'stop'."""
+    answer = input(
+        f'Plug the peripheral into the socket labelled {label} on the hub, then press Enter '
+        f'(s to skip this socket, q to stop): '
+    ).strip().lower()
+    if answer.startswith('q'):
+        return 'stop'
+    return 'skip' if answer.startswith('s') else 'go'
+
+
+def print_characterization(sockets) -> None:
+    """Print what was found as the source to paste into `CHANNEL_PORTS`.
+
+    It is written out rather than saved: the wiring is the same on every unit of the model, so
+    it belongs in the repository, not on one machine. NOTES.md says what else to record.
+    """
+    table = channel_ports_table(sockets)
+    print('')
+    for socket in sockets:
+        if socket.channel is None:
+            print(f'socket {socket.label}: not identified')
+        else:
+            hub = usb_id_str(socket.hub_usb_id)
+            print(f'socket {socket.label}: channel {socket.channel}, port {socket.port} of hub {hub}')
+    print('')
+    print('To paste into CHANNEL_PORTS in usbman/__init__.py:')
+    print('')
+    for hub_usb_id, ports in sorted(table.items()):
+        channels = ', '.join(f'{channel}: {port}' for channel, port in sorted(ports.items()))
+        print(f'    (0x{hub_usb_id[0]:04X}, 0x{hub_usb_id[1]:04X}): {{{channels}}},')
+    print('')
+    missing = [channel for channel in CHANNELS if channel not in {c for ports in table.values() for c in ports}]
+    if missing:
+        print(f'Channels {missing} were never seen: sockets you skipped, or channels with no socket.')
+    print('Record the table and what it settles in NOTES.md, then commit it.')
+
+
+def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logging):
     """Run one hub command.
+
+    `local` is false for a request which arrived over a socket: the options which write to
+    this machine are refused then, while resolving a device against it stays available.
 
     `device_path` comes from the caller, never from `argv`: locally from the `--device`
     transport option, in a server from the device it resolved at startup. It is resolved here
@@ -140,14 +306,43 @@ def run(argv=None, *, device_path=None, setup_logging=configure_logging):
 
     logging.debug(f'args = {args}')
 
-    if device_path is None:
-        try:
-            device_path = find_device_path()
-        except RuntimeError as e:
-            logging.error(f'{e}')
-            sys.exit(EXIT_ERROR)
-        logging.info(f'Using auto detected device {device_path}')
+    local_only = [name for name in ('snapshot', 'forget', 'characterize') if getattr(args, name)]
+    if local_only and not local:
+        names = ', '.join(f'--{name}' for name in local_only)
+        logging.error(f'{names} acts on the machine the hub is attached to, it cannot be asked for from here')
+        sys.exit(EXIT_ERROR)
 
+    if args.list:
+        print_listing(live_devices(), read_snapshot_entries())
+        return
+
+    if args.snapshot:
+        if args.on or args.set or args.clear or args.off_pulse or args.save:
+            # Switching and recording in one command would record the state before the boards
+            # that just came back have finished enumerating, which is the failure that broke
+            # the first --characterize. Two commands, with the wait in between.
+            logging.error('--snapshot records what is already connected, run it after the command which switches')
+            sys.exit(EXIT_ERROR)
+        print_snapshot(*capture_snapshot())
+        return
+
+    if args.forget:
+        path = snapshot_path()
+        try:
+            os.remove(path)
+            print(f'Removed {path}')
+        except OSError:
+            print(f'There was no snapshot at {path}')
+        return
+
+    if args.channel_of is not None:
+        # Pure sysfs and the snapshot: no hub is opened, so this answers even with the hub
+        # unplugged, and for a device which is switched off and therefore invisible.
+        print(resolve_channel(args.channel_of))
+        return
+
+    # Resolve and check every argument first. None of this needs the hub, so a bad channel or
+    # an unknown device says so instead of hiding behind "no managed USB hub found".
     exclusive = channel_set(args.on)
     to_set = channel_set(args.set)
     to_clear = channel_set(args.clear)
@@ -161,6 +356,26 @@ def run(argv=None, *, device_path=None, setup_logging=configure_logging):
     if conflicts:
         logging.error(f'--set and --clear are conflicting for channels {conflicts}')
         sys.exit(EXIT_ERROR)
+    if args.characterize and (exclusive or to_set or to_clear or to_pulse or args.save):
+        logging.error('--characterize switches every channel itself, it takes no other channel option')
+        sys.exit(EXIT_ERROR)
+    if args.characterize and not sys.stdin.isatty():
+        # It asks for a peripheral to be moved from socket to socket, so it cannot run down a
+        # pipe, and in particular not as a request to a usbman server.
+        logging.error('--characterize has to ask you to move a peripheral, run it in a terminal')
+        sys.exit(EXIT_ERROR)
+
+    if device_path is None:
+        try:
+            device_path = find_device_path()
+        except RuntimeError as e:
+            logging.error(f'{e}')
+            sys.exit(EXIT_ERROR)
+        logging.info(f'Using auto detected device {device_path}')
+
+    if args.characterize:
+        print_characterization(characterize_hub(device_path, socket_prompt, args.settle))
+        return
 
     get_state_errors = []
     org_state = None
