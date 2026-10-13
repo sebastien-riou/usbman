@@ -96,7 +96,7 @@ def test_a_device_which_is_not_connected_comes_from_the_snapshot(sysfs):
 
 def test_an_unknown_device_still_fails_with_the_live_error(sysfs):
     write(sysfs.snapshot, f'6 {STLINK}\n')
-    with pytest.raises(usbman.DeviceNotFound, match='NOSUCH'):
+    with pytest.raises(usbman.DeviceNotFoundError, match='NOSUCH'):
         usbman.resolve_channel('NOSUCH')
 
 
@@ -110,7 +110,7 @@ def test_a_device_found_somewhere_else_does_not_fall_back(sysfs):
 def test_an_absent_path_says_to_use_a_serial(sysfs):
     """A path cannot be looked up: it does not exist when the device is off."""
     write(sysfs.snapshot, f'6 {STLINK}\n')
-    with pytest.raises(usbman.DeviceNotFound, match='serial number'):
+    with pytest.raises(usbman.DeviceNotFoundError, match='serial number'):
         usbman.resolve_channel(sysfs.path('ttyGONE'))
 
 
@@ -136,9 +136,7 @@ def test_a_request_from_a_client_cannot_write_the_snapshot(sysfs):
 def test_a_client_can_still_resolve_against_the_snapshot(sysfs, hub, capsys):
     """Only writing is local. Looking a device up is what a remote client needs most."""
     write(sysfs.snapshot, '6 GONEAWAY\n')
-    usbman.cli.run(
-        ['--channel-of', 'GONEAWAY'], device_path='/dev/fake', local=False, setup_logging=lambda level: None
-    )
+    usbman.cli.run(['--channel-of', 'GONEAWAY'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
     assert capsys.readouterr().out == '6\n'
 
 

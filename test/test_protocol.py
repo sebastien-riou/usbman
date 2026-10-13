@@ -200,8 +200,7 @@ def test_requests_are_serialised(hub, routing):
     # each install and restore it, which is also how the server uses it.
     with routing:
         threads = [
-            threading.Thread(target=execute_request, args=(pulse, DEVICE, lambda line: None, routing))
-            for _ in range(3)
+            threading.Thread(target=execute_request, args=(pulse, DEVICE, lambda line: None, routing)) for _ in range(3)
         ]
         for thread in threads:
             thread.start()

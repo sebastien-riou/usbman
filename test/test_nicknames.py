@@ -81,7 +81,7 @@ def test_a_long_digit_nickname_is_allowed(sysfs):
 
 def test_an_unknown_nickname_names_itself_and_the_serial(sysfs):
     write(sysfs.nicknames, 'ghost NOSUCHSERIAL\n')
-    with pytest.raises(usbman.DeviceNotFound, match=r"serial number 'NOSUCHSERIAL'.*nickname 'ghost'"):
+    with pytest.raises(usbman.DeviceNotFoundError, match=r"serial number 'NOSUCHSERIAL'.*nickname 'ghost'"):
         usbman.resolve_channel('ghost')
 
 
@@ -119,9 +119,7 @@ def xdg(tmp_path, monkeypatch):
     monkeypatch.delenv(usbman.USBMAN_DIR_ENV, raising=False)
     monkeypatch.setenv('XDG_CONFIG_HOME', str(config))
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
-    return types.SimpleNamespace(
-        config=str(config / 'usbman' / 'nicknames'), state=str(state / 'usbman' / 'nicknames')
-    )
+    return types.SimpleNamespace(config=str(config / 'usbman' / 'nicknames'), state=str(state / 'usbman' / 'nicknames'))
 
 
 def test_the_config_directory_is_looked_at_first(xdg):

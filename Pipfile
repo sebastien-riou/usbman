@@ -4,7 +4,6 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pysatl = "1.2.6"
 pyserial = "3.5"
 usbman = {file = "."}
 

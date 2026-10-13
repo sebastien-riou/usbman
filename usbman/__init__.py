@@ -3,8 +3,7 @@ import os
 import time
 from typing import NamedTuple
 
-import serial.tools.list_ports
-from pysatl import Utils
+from serial.tools import list_ports
 
 from usbman.clicom import serial_command_response
 
@@ -35,7 +34,6 @@ def command(opcode: str, payload: bytes = b'') -> str:
     """Return the command string for `opcode`, with its password field and optional payload."""
     if opcode not in OPCODES:
         raise ValueError(f'Refusing to send the unverified command {opcode!r}, see OPCODES')
-    # `payload.hex()` and not `Utils.hexstr`, which separates the bytes with spaces.
     return f'{opcode}{PASSWORD}{payload.hex().upper()}\r'
 
 
@@ -56,11 +54,8 @@ def decode_result(res: str) -> int:
         raise RuntimeError(f'Device returned "{res}" ({reason})')
     if res.startswith(b'G'):
         res = res[1:]
-    state = res[:2]
-    state = state.decode()
-    state = Utils.ba(state)
-    state = int.from_bytes(state, byteorder='little')
-    state &= 0x7F
+    # The first byte is the channel bitmap; bit 7 is channel 8, which a 7 channel hub has not.
+    state = int(res[:2], 16) & 0x7F
     logging.debug(f'state = {state}')
     return state
 
@@ -225,7 +220,7 @@ def usb_topology(device_path: str) -> tuple:
 def serial_devices() -> list[SerialDevice]:
     """Return all the serial devices of the system, with their place on the USB tree."""
     devices = []
-    for port in serial.tools.list_ports.comports():
+    for port in list_ports.comports():
         device = SerialDevice(port.device, *usb_topology(port.device))
         logging.debug(f'{device}, {port.description}')
         devices.append(device)
@@ -260,7 +255,7 @@ def find_device_path() -> str:
     )
 
 
-class DeviceNotFound(RuntimeError):
+class DeviceNotFoundError(RuntimeError):
     """No such device in the USB tree.
 
     Its own type because it is the one failure a snapshot can answer: the device is absent,
@@ -470,7 +465,7 @@ def usb_node(reference: str) -> str:
         name = os.path.basename(os.path.realpath(reference))
         node = usb_device_node(os.path.join(TTY_SYSFS, name, 'device'))
         if node is None:
-            raise DeviceNotFound(
+            raise DeviceNotFoundError(
                 f'{reference} is not a USB device the system knows about. A device which is off has no '
                 f'path at all: name it by its USB serial number to reach it through a snapshot'
             )
@@ -478,7 +473,7 @@ def usb_node(reference: str) -> str:
 
     nodes = usb_nodes_by_serial(reference)
     if not nodes:
-        raise DeviceNotFound(f'No USB device has the serial number {reference!r}')
+        raise DeviceNotFoundError(f'No USB device has the serial number {reference!r}')
     if len(nodes) > 1:
         shared = ', '.join(describe_usb_node(node) for node in nodes)
         raise RuntimeError(
@@ -765,12 +760,12 @@ def resolve_channel(reference: str) -> int:
         reference = serial
     try:
         return channel_of(reference)
-    except DeviceNotFound as absent:
+    except DeviceNotFoundError as absent:
         channel = snapshot_channel(reference)
         if channel is None:
             if serial is None:
                 raise
             # Keep what went wrong and add which nickname led there, rather than replacing it.
-            raise DeviceNotFound(f'{absent} (the nickname {named.split()[0]!r})') from absent
+            raise DeviceNotFoundError(f'{absent} (the nickname {named.split()[0]!r})') from absent
         logging.info(f'{named} is not connected, the snapshot puts it on channel {channel}')
         return channel

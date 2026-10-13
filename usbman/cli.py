@@ -5,7 +5,6 @@ import sys
 import time
 
 from usbman import (
-    CHANNEL_PORTS,
     CHANNELS,
     capture_snapshot,
     channel_ports_table,
@@ -218,9 +217,7 @@ def print_listing(live, snapshot) -> None:
             print(f'{channel:<9}{"-":<{nick_width + 2}}{"-":<10}{"-":<{serial_width + 2}}-')
         for _, source, serial, product in on_channel:
             nickname = nicknames.get(serial, '-')
-            print(
-                f'{channel:<9}{nickname:<{nick_width + 2}}{source:<10}{serial or "-":<{serial_width + 2}}{product}'
-            )
+            print(f'{channel:<9}{nickname:<{nick_width + 2}}{source:<10}{serial or "-":<{serial_width + 2}}{product}')
 
     stale = [
         (serial, channel, seen[serial]) for channel, serial, _ in snapshot if serial in seen and seen[serial] != channel
@@ -252,10 +249,14 @@ def print_snapshot(entries, unnamed: int) -> None:
 
 def socket_prompt(label: int) -> str:
     """Ask for the peripheral to be moved to one socket. Returns 'go', 'skip' or 'stop'."""
-    answer = input(
-        f'Plug the peripheral into the socket labelled {label} on the hub, then press Enter '
-        f'(s to skip this socket, q to stop): '
-    ).strip().lower()
+    answer = (
+        input(
+            f'Plug the peripheral into the socket labelled {label} on the hub, then press Enter '
+            f'(s to skip this socket, q to stop): '
+        )
+        .strip()
+        .lower()
+    )
     if answer.startswith('q'):
         return 'stop'
     return 'skip' if answer.startswith('s') else 'go'

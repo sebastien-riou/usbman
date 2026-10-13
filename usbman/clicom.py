@@ -4,13 +4,17 @@ import os
 import time
 
 import serial
-from pysatl import Utils
+
+
+def hexstr(data: bytes) -> str:
+    """Return `data` as uppercase hex with a space between bytes, the way a log reads best."""
+    return data.hex(' ').upper()
 
 
 def serial_command_response(device_path, *, send_hexstr=None, send_str=None, send_bytes=None) -> bytes:
     data_to_send = None
     if send_hexstr:
-        data_to_send = Utils.ba(send_hexstr)
+        data_to_send = bytes.fromhex(send_hexstr)
     if send_str:
         data_to_send = bytes(send_str, 'utf-8').decode('unicode_escape').encode()
     if send_bytes:
@@ -18,7 +22,7 @@ def serial_command_response(device_path, *, send_hexstr=None, send_str=None, sen
 
     with serial.Serial(device_path, exclusive=True, baudrate=9600) as device:
         if data_to_send:
-            logging.debug(f'Data to send: {Utils.hexstr(data_to_send)}')
+            logging.debug(f'Data to send: {hexstr(data_to_send)}')
             logging.debug(f'Data to send: {data_to_send}')
             device.write(data_to_send)
             device.flush()
