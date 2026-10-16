@@ -132,12 +132,17 @@ CONTROL_UART_USB_IDS = frozenset(
     }
 )
 
-# Downstream port each hub wires its control interface to, when known. This tells the built in
-# control interface from a USB to serial adapter plugged into the very same hub, which uses the
-# same chips and so is otherwise indistinguishable. Only used to break such a tie, a hub
-# missing from this table is still detected as long as it is the only candidate.
+# Downstream port each hub section wires its control interface to, `None` for a section which
+# wires none. This is what tells the built in control interface from anything plugged into one
+# of the hub's own sockets: the chip ids are a claim any device can make, and a device on a
+# socket has a managed hub as its parent just as the real one does.
+#
+# List every section of a model you add, so that a port on it can be checked. A section missing
+# from here cannot be checked at all, and anything claiming to be a control interface on it is
+# taken at its word.
 CONTROL_UART_HUB_PORTS = {
-    (0x14B0, 0x044C): 4,  # StarTech.com 7 ports managed hub
+    (0x14B0, 0x044A): None,  # StarTech.com 7 ports managed hub, upstream section: wires none
+    (0x14B0, 0x044C): 4,  # StarTech.com 7 ports managed hub, downstream section
 }
 
 # Downstream port each channel switches, by hub section: channel -> port. Fixed by the wiring
@@ -163,17 +168,24 @@ class SerialDevice(NamedTuple):
     hub_port: int | None  # downstream port of that hub it is connected to
 
     def is_hub_control_interface(self) -> bool:
-        """Tell whether this device is the control interface of a managed hub.
+        """Tell whether this device claims to be the control interface of a managed hub.
 
-        Both the serial chip and the hub it hangs on must be known: devices merely plugged
-        into a managed hub also have a managed hub as parent, and the same serial chips are
-        also used by plain USB to serial cables.
+        A claim, not a finding: both the serial chip and the hub it hangs on must be known, but
+        the same chips are used by plain USB to serial cables, and firmware on a board plugged
+        into one of the hub's sockets can report them too — its parent is then a managed hub
+        just as the real control interface's is. `is_on_control_interface_port` settles it.
         """
         return self.usb_id in CONTROL_UART_USB_IDS and self.hub_usb_id in MANAGED_HUB_USB_IDS
 
     def is_on_control_interface_port(self) -> bool:
-        """Tell whether this device sits on the port its hub wires its control interface to."""
-        return CONTROL_UART_HUB_PORTS.get(self.hub_usb_id) == self.hub_port
+        """Tell whether the port this device is on could carry its hub's control interface.
+
+        True for a hub section which is not in `CONTROL_UART_HUB_PORTS`, since there is then
+        nothing to check the port against.
+        """
+        if self.hub_usb_id not in CONTROL_UART_HUB_PORTS:
+            return True
+        return CONTROL_UART_HUB_PORTS[self.hub_usb_id] == self.hub_port
 
     def __str__(self) -> str:
         return (
@@ -247,19 +259,27 @@ def find_device_path() -> str:
     because none or several were found.
     """
     devices = serial_devices()
-    hubs = [device for device in devices if device.is_hub_control_interface()]
-    if len(hubs) > 1:
-        # A USB to serial adapter plugged into a managed hub looks just like the control
-        # interface of that hub, tell them apart by the port they are on.
-        on_control_port = [hub for hub in hubs if hub.is_on_control_interface_port()]
-        logging.debug(f'{len(hubs)} candidates, {len(on_control_port)} on a control interface port')
-        if len(on_control_port) == 1:
-            hubs = on_control_port
+    # The ids are only a claim, so the port is checked for every candidate and not merely to
+    # break a tie between several. A board on one of the hub's sockets which reports a control
+    # interface chip would otherwise be accepted whenever the real one is absent — while the
+    # downstream section is still coming up, say — and usbman would then drive the board
+    # instead of the hub, switching nothing while it believes it is switching.
+    candidates = [device for device in devices if device.is_hub_control_interface()]
+    hubs = [device for device in candidates if device.is_on_control_interface_port()]
+    refused = [device for device in candidates if device not in hubs]
+    logging.debug(f'{len(candidates)} candidate(s), {len(refused)} on a port carrying no control interface')
     if len(hubs) == 1:
         return hubs[0].path
     if hubs:
         found = ', '.join(str(hub) for hub in hubs)
         raise RuntimeError(f'Several managed USB hubs found ({found}), use --device to select one')
+    if refused:
+        rejected = ', '.join(str(device) for device in refused)
+        raise RuntimeError(
+            f'No managed USB hub found. Refused {rejected}: a control interface chip on a port which '
+            f'carries none, so plugged into one of the hub sockets rather than being the hub itself. '
+            f'Use --device to talk to one anyway'
+        )
     seen = ', '.join(str(device) for device in devices) if devices else 'none'
     raise RuntimeError(
         f'No managed USB hub found among the serial devices of the system ({seen}), '

@@ -94,7 +94,7 @@ being no eighth channel rather than with the bit meaning something. Harmless her
 Channel *n* is wired to one downstream port of one of the hub's sections. That wiring is inside
 the hub, so it is the same on every unit of a model, independent of what is plugged in, and it
 belongs in `CHANNEL_PORTS` in [usbman/\_\_init\_\_.py](usbman/__init__.py) rather than in anyone's
-configuration. It is what lets `usbman --channel-of /dev/ttyACM0` work: the USB tree says which
+configuration. It is what lets `usbman channel-of /dev/ttyACM0` work: the USB tree says which
 port a device hangs on, and this table says which channel switches that port.
 
 ### StarTech 7 ports (`14b0:044a` + `14b0:044c`)
@@ -127,17 +127,17 @@ is exactly what was seen: plugging a peripheral into socket 7 made no port appea
 cutting channel 7 emptied nothing. Not **verified**: a USB power meter in socket 7 while
 toggling channel 7, or the vendor's own description of the port, would settle it.
 
-Until it is, `usbman --channel-of` cannot name anything in socket 7, but `--set 7` and
-`--clear 7` switch it like any other channel.
+Until it is, `usbman channel-of` cannot name anything in socket 7, but `+7` and
+`-7` switch it like any other channel.
 
 ### Measuring it, to add a hub model
 
-`usbman --characterize` is for this and nothing else — nobody needs it to *use* usbman. It asks
+`usbman characterize` is for this and nothing else — nobody needs it to *use* usbman. It asks
 you to plug **one peripheral** into each socket of the hub in turn, and for each one works out
 which channel switches it:
 
 ```
-$ usbman --characterize
+$ usbman characterize
 Plug the peripheral into the socket labelled 1 on the hub, then press Enter (s to skip this socket, q to stop):
 socket 1 is channel 3, port 1 of hub 14b0:044a
 Plug the peripheral into the socket labelled 2 on the hub, then press Enter (s to skip this socket, q to stop):
@@ -243,7 +243,7 @@ opcode absent from `OPCODES`, so `FP`, `RD`, `RH` and above all `CP` cannot go o
 Add an opcode there only once it has been verified against `cusbi`.
 
 `FP` would let `--set 1 5 --save` be a single command instead of `SP` followed by `WP`; it is not
-used because one uniform `WP` at the end also covers `--off-pulse`, where the state worth saving
+used because one uniform `WP` at the end also covers `--reset`, where the state worth saving
 only exists once the pulse is over.
 
 ## Open questions

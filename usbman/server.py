@@ -1,4 +1,4 @@
-"""Server and client for `usbman --serve` and `usbman --connect`.
+"""Server and client for `usbman serve` and `usbman --connect`.
 
 The hub control interface is a serial device, so only a process which can see it may drive the
 hub. The server owns that device and runs the very same command line on behalf of clients: the
@@ -31,7 +31,7 @@ TAG_ERR = 'E'  # goes to the client stderr
 EXIT_PREFIX = 'EXIT '
 
 # One hub, so one request at a time. The lock spans the whole request and not a single command:
-# `--off-pulse` is several commands with a sleep in between, and two clients interleaving there
+# `--reset` is several commands with a sleep in between, and two clients interleaving there
 # would leave channels off. It is in process only, a local `usbman` run still interleaves.
 LOCK = threading.Lock()
 
@@ -42,12 +42,10 @@ def split_transport(args):
     The transport options are deliberately absent from the hub command parser: they answer
     which hub and how to reach it, not what to do to it. `parse_known_args` hands back the rest
     untouched, so the client forwards exactly what the user typed. `allow_abbrev` is off so
-    that this parser does not swallow abbreviations such as `--s`, which belong to the hub
-    command parser.
+    that this parser does not swallow an abbreviation which belongs to a command.
     """
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument('--device', default=None)
-    parser.add_argument('--serve', nargs='?', const='', default=None)
     parser.add_argument('--connect', default=None)
     parser.add_argument('--timeout', type=float, default=-1)
     return parser.parse_known_args(list(args))
@@ -268,7 +266,7 @@ class Handler(socketserver.StreamRequestHandler):
         """Write one framed line, tolerating a client which has gone away.
 
         Swallowing the error is what keeps a disconnect from aborting the hub operation: were
-        it to propagate out of a `print` inside the command, an `--off-pulse` would stop with
+        it to propagate out of a `print` inside the command, a `--reset` would stop with
         the channels still off.
         """
         try:
@@ -284,24 +282,18 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def serve(endpoint=DEFAULT_ENDPOINT, argv=(), device_path=None, timeout=-1):
-    """Serve the hub commands on `endpoint` until interrupted."""
-    # Validate what is left of the command line with the real parser, so that `--serve` accepts
-    # exactly the options it can honour and nothing silently does nothing.
-    parser = cli.build_parser()
-    args = parser.parse_args(list(argv))
-    commands = ('on', 'set', 'clear', 'off_pulse', 'save', 'channel_of', 'path_of', 'id_path_of')
-    commands += ('list', 'snapshot', 'forget', 'characterize')
-    if any(getattr(args, name) for name in commands):
-        parser.error('--serve takes no hub command, clients send those')
+def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1):
+    """Serve the hub commands on `endpoint` until interrupted.
 
-    cli.configure_logging(args.log_level)
+    argparse allows one command, so `serve` cannot carry a hub command and there is nothing
+    left to validate here.
+    """
     if device_path is None:
         device_path = find_device_path()
 
     host, port = parse_endpoint(endpoint)
     Server.address_family = address_family(host)
-    routing = Routing(args.log_level)
+    routing = Routing(logging.getLevelName(logging.getLogger().level))
     try:
         server = Server((host, port), Handler)
     except OSError as e:

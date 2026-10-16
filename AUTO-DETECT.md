@@ -30,19 +30,31 @@ managed hub is *also* a child of that hub, so the second test alone matches all 
 typical desk that means an ST-Link, a Nu-Link2 and a Pico all pass test 2 and are correctly
 rejected by test 1.
 
-## Telling the control interface from an adapter on the same hub
+## Telling the control interface from something on the same hub
 
 A USB to serial adapter plugged into the managed hub satisfies both tests: same chip, same parent
-hub. It is genuinely indistinguishable by ids alone.
+hub. So does a board whose firmware reports those ids — the first test is a claim any device can
+make, and anything in a socket has a managed hub as its parent exactly as the real control
+interface does. By ids alone they are indistinguishable.
 
 What separates them is the **downstream port**. A hub wires its control interface to one fixed
-port, and that port is not one of the sockets on the case — so an adapter you plug in can never
-land on it. `CONTROL_UART_HUB_PORTS` records that port per hub model, and it is consulted **only
-to break a tie**: with a single candidate the port is never looked at, so a hub model missing
-from the table is still detected as long as it is the only candidate.
+port, and that port is not one of the sockets on the case — so nothing you plug in can ever land
+on it. `CONTROL_UART_HUB_PORTS` records that port for every section of a known model, with
+`None` for a section which carries no control interface at all.
 
-If the tie cannot be broken — no candidate on a known control port, or several — `usbman` refuses
-rather than guessing, and asks for `--device`.
+**The port is checked for every candidate, not only to break a tie between several.** Checking it
+only when there was a competitor meant an impostor was accepted on any port whenever the real
+control interface was absent — while the downstream section was still coming up, after its chip
+reset, or on a fault. `usbman` would then have driven the board instead of the hub: switching
+nothing, while reporting whatever the board chose to answer, so a channel believed off could
+stay on. The error names the candidates it refused and which port they were on, and `--device`
+still talks to one deliberately.
+
+A hub section missing from the table cannot be checked, so a candidate on it is taken at its
+word — which is why a model you add should list all of its sections.
+
+If no candidate is left, or several are, `usbman` refuses rather than guessing, and asks for
+`--device`.
 
 `removable` in sysfs would have been a cleaner discriminator, but these hubs report `unknown` for
 every downstream device, so it is unusable.
@@ -53,9 +65,11 @@ In [usbman/\_\_init\_\_.py](usbman/__init__.py):
 
 - `usb_topology()` resolves `/sys/class/tty/<name>/device`, walks up to the first node carrying
   an `idVendor`, and reads that node's ids, its `devpath` port number, and its parent's ids.
-- `SerialDevice.is_hub_control_interface()` applies the two tests above;
-  `is_on_control_interface_port()` is the tie-breaker.
-- `find_device_path()` requires exactly one match and raises otherwise.
+- `SerialDevice.is_hub_control_interface()` applies the two id tests, which is only the claim;
+  `is_on_control_interface_port()` checks the port against `CONTROL_UART_HUB_PORTS`, and is true
+  for a hub section the table does not mention.
+- `find_device_path()` requires exactly one device passing both, and raises otherwise, naming
+  the candidates the port check refused.
 
 This reads the USB tree from sysfs, so it works on Linux. Elsewhere the topology comes back
 empty, no device qualifies, and `--device` is required.
@@ -86,7 +100,7 @@ Add what the hub reports to the three tables in [usbman/\_\_init\_\_.py](usbman/
 | --- | --- |
 | `MANAGED_HUB_USB_IDS` | the ids of each USB hub the managed hub presents (a 7-port model appears as two cascaded 4-port hubs, so both) |
 | `CONTROL_UART_USB_IDS` | the ids of the serial chip, if it is not the FT232R already listed |
-| `CONTROL_UART_HUB_PORTS` | the downstream port the control interface is wired to, if you can determine it |
+| `CONTROL_UART_HUB_PORTS` | the downstream port the control interface is wired to, for **every** section of the model, `None` for one which carries none |
 
 The last one is optional: without it the hub is still detected whenever it is the only candidate.
 To determine it, note the port reported for the control interface in the DEBUG listing above,

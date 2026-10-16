@@ -1,6 +1,6 @@
 # The usbman server
 
-`usbman --serve` owns the serial device and runs hub commands for clients which cannot reach it
+`usbman serve` owns the serial device and runs hub commands for clients which cannot reach it
 themselves: users on another machine, and anything inside a sandbox. README.md shows how to use
 it; this documents how it behaves and what goes over the socket.
 
@@ -13,7 +13,8 @@ matters most, in `test/test_server.py`, runs a command locally and remotely and 
 byte for byte.
 
 The consequence is that `--connect` accepts anything the local command accepts, including
-`--help`, and that a bad argument is reported by the server exactly as it would be locally.
+`--help`, and that a bad argument is reported by the server exactly as it would be locally. The
+`+1 -3` shorthand is expanded at both ends, so it works typed straight at the socket too.
 
 ## The wire protocol
 
@@ -28,17 +29,16 @@ response   "O <text>"   a line for the client stdout
 
 ```
 $ nc 127.0.0.1 9877
---set 1 3
++1 +3
 O On: 1 3 
 EXIT 0
---set 8
-E usage: usbman [-h] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
-E               [--on ON [ON ...]] [--set SET [SET ...]]
-E               [--clear CLEAR [CLEAR ...]]
-E               [--off-pulse OFF_PULSE [OFF_PULSE ...]] [--toff TOFF] [--save]
-E usbman: error: argument --set: invalid channel '8', expected 1 to 7 or 'all'
++8
+E usage: usbman switch [-h] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+E                      [--save] [--on CHANNEL [CHANNEL ...]]
+E                      [--off CHANNEL [CHANNEL ...]]
+E usbman switch: error: argument --on: invalid channel '8', expected 1 to 7 or 'all'
 EXIT 2
---clear all
+switch --off all
 O All off
 EXIT 0
 ```
@@ -47,12 +47,12 @@ Details worth knowing:
 
 - **The two streams stay apart.** The commands print their result but report every error through
   the log, and argparse writes its usage errors straight to stderr. A client which merged them
-  would add log noise to `usbman --set 1 | grep`, and the point of `USBMAN_SERVER` is that a
+  would add log noise to `usbman +1 | grep`, and the point of `USBMAN_SERVER` is that a
   pipeline cannot tell the difference.
 - **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space.
 - **One connection carries as many requests as you like**, so a session with `nc` is a small
   REPL and a script can hold one connection open.
-- Lines are sent as they are produced, so a long `--off-pulse` shows its progress.
+- Lines are sent as they are produced, so a long `--reset` shows its progress.
 - A request is capped at 4096 bytes; a longer one is refused and the connection closed, since
   the stream is then out of step.
 - Anything which is not valid UTF-8 is replaced rather than raising, so a port scanner or a
@@ -62,7 +62,7 @@ Details worth knowing:
 
 ## One request at a time
 
-A lock is held for the **whole request**, not for each command sent to the hub. `--off-pulse` is
+A lock is held for the **whole request**, not for each command sent to the hub. `--reset` is
 several commands with a wait in between, so two clients pulsing at once would otherwise
 interleave and leave channels off.
 
@@ -74,7 +74,7 @@ hub and drive it through that.
 
 If the client disconnects, the hub operation still **runs to its end**. This is deliberate: were
 a broken connection allowed to interrupt the command, a client which vanished in the middle of an
-`--off-pulse` would leave the channels off for good. Interrupting the client is safe, and the
+`--reset` would leave the channels off for good. Interrupting the client is safe, and the
 pulse completes without it.
 
 ## Timeouts
@@ -101,7 +101,7 @@ startup, the server refuses to start rather than accepting clients it cannot ser
 
 ## What a client may not ask for
 
-`--snapshot`, `--forget` and `--characterize` act on the machine the hub is attached to — they
+`snapshot`, `forget`, `characterize` and `serve` act on the machine the hub is attached to — they
 write a file there, or ask someone standing at the hub to move a peripheral — so a request
 carrying any of them is refused. The server tells `run()` that the request did not originate
 locally and it declines.
@@ -109,8 +109,8 @@ locally and it declines.
 Resolving a device is *not* local: a client naming a device by path or serial number is answered
 from the server's USB tree and, failing that, the server's snapshot. That is the right way
 round, since the devices and the hub are both on the server's machine. So
-`usbman --connect … --set 004B0028…` switches on a board which is currently off, while
-`usbman --connect … --snapshot` is refused.
+`usbman --connect … +004B0028…` switches on a board which is currently off, while
+`usbman --connect … snapshot` is refused.
 
 ## Security
 
@@ -131,7 +131,7 @@ Description=usbman server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/usbman --serve 127.0.0.1:9877
+ExecStart=/usr/local/bin/usbman serve 127.0.0.1:9877
 Restart=on-failure
 User=yourself            # must be in the group owning /dev/ttyUSB*, usually dialout
 

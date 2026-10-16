@@ -32,6 +32,27 @@ Add `dist/usbman` in your PATH.
 
 ## How to
 
+`usbman` takes one command, and each command takes its own options:
+
+| Command | What it does |
+| --- | --- |
+| *(none)* | print which channels are on |
+| `switch --on … --off …` | turn channels on and off, leaving the others alone |
+| `only CHANNELS…` | exactly these on, every other one off |
+| `reset CHANNELS…` | power cycle what is on them |
+| `save` | store the current states as the power up states |
+| `channel-of DEVICE` | which channel powers a device |
+| `path-of CHANNEL` | the `/dev` path of the port on a channel |
+| `id-path-of CHANNEL` | the same, as a stable `/dev/serial/by-id` path |
+| `list` | which device is on which channel |
+| `snapshot` | remember which channel each device is on |
+| `forget` | delete the snapshot |
+| `characterize` | work out a hub model's wiring |
+| `serve [HOST:PORT]` | serve the commands above on a socket |
+
+`usbman COMMAND --help` describes one command. `--device`, `--connect` and `--timeout` go
+before the command, since they say which hub to talk to rather than what to do to it.
+
 ### Select the device
 `--device` is optional: leave it out and `usbman` finds the hub on its own, so all the examples
 below work the same way without it.
@@ -61,68 +82,63 @@ usbman --device /dev/ttyUSB0
 ````
 
 ### Turn some channels on or off
-`--set` turns channels on and `--clear` turns them off, both leaving every other channel as it
-was. This turns channels 1 and 5 on, whatever the others are doing:
+`switch` turns channels on and off, leaving every other channel as it was:
 ````
-usbman --device /dev/ttyUSB0 --set 1 5
+usbman switch --on 1 5          # 1 and 5 on, whatever the others are doing
+usbman switch --off 1 5         # and off again
+usbman switch --on 1 --off 3    # both at once, in one operation
 ````
-And this turns them off again:
+There is a shorthand for this, which is what you will type most of the time:
 ````
-usbman --device /dev/ttyUSB0 --clear 1 5
+usbman +1 +5        # same as: usbman switch --on 1 5
+usbman -3           # same as: usbman switch --off 3
+usbman +1 +2 -3     # same as: usbman switch --on 1 2 --off 3
 ````
-`--clr` is a shorter spelling of `--clear`. `all` stands for every channel of the hub, so this
-turns everything off:
-````
-usbman --device /dev/ttyUSB0 --clr all
-````
+`all` stands for every channel of the hub, so `usbman -all` turns everything off.
 
 ### Decide the state of every channel at once
-`--on` is absolute: the channels you list end up on and **every other one ends up off**. This
-leaves channels 2, 3 and 5 on and the rest off, whatever the hub was doing before:
+`only` is absolute: the channels you list end up on and **every other one ends up off**.
 ````
-usbman --device /dev/ttyUSB0 --on 2 3 5
+usbman only 2 3 5     # exactly these three, whatever the hub was doing before
 ````
-Because it already decides every channel, `--on` cannot be combined with `--set`, `--clear` or
-`--off-pulse`; asking for both is refused rather than silently resolved.
+`only 1 5` and `switch --on 1 5` are the pair worth keeping straight: the first decides every
+channel, the second touches only the ones you name.
 
-> **Changed in 2.0** — `--on` used to mean what `--set` means now. A command line such as
-> `usbman --on 1 5` still works but no longer leaves the other channels alone: replace it with
-> `--set 1 5` to keep the old behaviour.
+> **Changed in 2.0** — the whole command line changed shape. `usbman --on 1 5` is now
+> `usbman switch --on 1 5` (or `usbman +1 +5`), `--off` is `switch --off`, and the old absolute
+> `--on` is `only`. One command per invocation, and each command's options belong to it.
 
-### Turn off some channels for some time and turn back on
-This turn off channel 1 and 5 for 0.5 second:
+### Reset some channels
+`reset` turns channels off and back on again, power cycling whatever is plugged into them:
 ````
-usbman --device /dev/ttyUSB0 --off-pulse 1 5 --toff=0.5
+usbman reset 1 5 --toff 0.5     # held off for half a second
+usbman reset all                # power cycle the whole hub
 ````
-`all` works here too, this power cycles the whole hub:
-````
-usbman --device /dev/ttyUSB0 --off-pulse all --toff=0.5
-````
-Note that the pulsed channels are all on when the command returns, whether they were on or off
-to begin with.
+`--toff` is how long they stay off, one second by default. Note that the reset channels are all
+**on** when the command returns, whether they were on or off to begin with.
 
 ### Persist the state across power down
 The hub can store a state in its flash and come up in that state after a power down. `--save`
 stores whatever state the command ends up with, so this turns channels 1 and 5 on and makes
 that the state the hub powers up with:
 ````
-usbman --device /dev/ttyUSB0 --set 1 5 --save
+usbman switch --on 1 5 --save
 ````
-`--save` on its own stores the state the hub is currently in:
+`save` on its own stores the state the hub is currently in:
 ````
-usbman --device /dev/ttyUSB0 --save
+usbman save
 ````
-It applies last, after the channel options, so `--off-pulse ... --save` stores the state left by
-the pulse, in which every pulsed channel is on.
+As an option it applies last, so `reset 1 --save` stores the state left by the reset, in which
+the reset channel is on.
 
 ### Name a device instead of a channel
 Anywhere a channel number is accepted, you can instead name a device plugged into the hub and
 let `usbman` work out which channel powers it:
 ````
-usbman --off-pulse /dev/ttyACM0                       # power cycle whatever that board is
-usbman --off-pulse myboard                            # the same board, by the name you gave it
-usbman --channel-of /dev/ttyACM0                      # just print the channel
-usbman --clear /dev/ttyACM0 3                         # mixed with plain channel numbers
+usbman reset /dev/ttyACM0                             # power cycle whatever that board is
+usbman reset myboard                                  # the same board, by the name you gave it
+usbman channel-of /dev/ttyACM0                        # just print the channel
+usbman switch --off /dev/ttyACM0 3                    # mixed with plain channel numbers
 ````
 Four ways to name a device, all equivalent:
 
@@ -161,16 +177,16 @@ socket to socket; [NOTES.md](NOTES.md) describes how to add a model.
 The other way round from `--channel-of`: name a channel and get the serial port on it, so you
 can hand it to whatever talks to the board.
 ````
-$ usbman --path-of 4
+$ usbman path-of 4
 /dev/ttyACM0
-$ usbman --path-of numaker          # a nickname or a serial number names the channel too
+$ usbman path-of numaker           # a nickname or a serial number names the channel too
 /dev/ttyACM0
-$ screen $(usbman --path-of numaker) 115200
+$ screen $(usbman path-of numaker) 115200
 ````
 `--id-path-of` answers the same question with the stable name udev builds from the device's
 manufacturer, product and serial number, which does not move when things are re-plugged:
 ````
-$ usbman --id-path-of numaker
+$ usbman id-path-of numaker
 /dev/serial/by-id/usb-Nuvoton_Nu-Link2_CMSIS-DAP_13150000000A25020450395D00000FCD-if01
 ````
 That is the one to put in a script or a config file; `/dev/ttyACM0` is only true until the next
@@ -195,9 +211,9 @@ myboard      004B00283532510831333430
 pico         648326155B4B110B
 ````
 ````
-usbman --off-pulse numaker        # power cycle the Numaker board
-usbman --on myboard pico          # those two on, everything else off
-usbman --channel-of numaker
+usbman reset numaker             # power cycle the Numaker board
+usbman only myboard pico         # those two on, everything else off
+usbman channel-of numaker
 ````
 A nickname can be used anywhere a channel number can, and it works for a device which is
 switched off exactly as its serial number does, through the snapshot below.
@@ -212,18 +228,18 @@ Resolving a device means finding it on the USB tree, and a device on a channel w
 not there to be found. `--snapshot` records where everything is while it is still on, so you
 can name it afterwards:
 ````
-usbman --on all        # everything up, so everything can be seen
-usbman --snapshot      # remember which channel each device is on
+usbman +all            # everything up, so everything can be seen
+usbman snapshot        # remember which channel each device is on
 ````
 From then on a device can be named even while it is off, which is what lets you switch it back
 on by name:
 ````
-usbman --clear 004B00283532510831333430   # the board goes away
-usbman --set 004B00283532510831333430     # and comes back, by name
+usbman -004B00283532510831333430   # the board goes away
+usbman +004B00283532510831333430   # and comes back, by name
 ````
 `--list` shows what is on each channel, from the USB tree and from the snapshot together:
 ````
-$ usbman --list
+$ usbman list
 channel  nickname  source    serial                    device
 1        myboard   live      004B00283532510831333430  STLINK-V3
 1        -         live      -                         USB2.1 Hub
@@ -285,19 +301,19 @@ server answers from its own USB tree and its own snapshot.
 Only a process which can see the serial device may drive the hub, which leaves out remote users
 and anything running in a sandbox. `--serve` hands the command line to them over a socket:
 ````
-usbman --serve
+usbman serve
 ````
 The server owns the hub and runs the very same commands on behalf of its clients:
 ````
-usbman --connect 127.0.0.1:9877 --set 1 5
+usbman --connect 127.0.0.1:9877 +1 +5
 ````
 Every option works exactly as it does locally, because the client forwards what you typed and
 the server runs the same command line. Setting `USBMAN_SERVER` gets an existing script or an
 automated agent onto a remote hub with no change at all:
 ````
 export USBMAN_SERVER=127.0.0.1:9877
-usbman --set 1 5
-USBMAN_SERVER= usbman --set 1 5   # this one goes back to the local hub
+usbman +1 +5
+USBMAN_SERVER= usbman +1 +5   # this one goes back to the local hub
 ````
 **There is no authentication.** The server binds the loopback interface by default, so only
 this machine can reach it; give it an address of its own only on a network you trust, since

@@ -127,7 +127,7 @@ def test_reading_a_snapshot_which_is_not_there_is_empty(sysfs):
 
 def test_a_request_from_a_client_cannot_write_the_snapshot(sysfs):
     """`local=False` is how the server says a request came in over the socket."""
-    for option in ('--snapshot', '--forget'):
+    for option in ('snapshot', 'forget'):
         with pytest.raises(SystemExit) as refused:
             usbman.cli.run([option], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
         assert refused.value.code == usbman.cli.EXIT_ERROR
@@ -136,36 +136,36 @@ def test_a_request_from_a_client_cannot_write_the_snapshot(sysfs):
 def test_a_client_can_still_resolve_against_the_snapshot(sysfs, hub, capsys):
     """Only writing is local. Looking a device up is what a remote client needs most."""
     write(sysfs.snapshot, '6 GONEAWAY\n')
-    usbman.cli.run(['--channel-of', 'GONEAWAY'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
+    usbman.cli.run(['channel-of', 'GONEAWAY'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
     assert capsys.readouterr().out == '6\n'
 
 
 def test_snapshot_is_refused_next_to_a_switching_option(sysfs):
     with pytest.raises(SystemExit):
-        usbman.cli.run(['--snapshot', '--set', '1'], device_path='/dev/fake', setup_logging=lambda level: None)
+        usbman.cli.run(['snapshot', 'switch', '--on', '1'], device_path='/dev/fake', setup_logging=lambda level: None)
 
 
 def test_forget_removes_the_snapshot(sysfs, capsys):
     write(sysfs.snapshot, f'1 {FT232R}\n')
-    usbman.cli.run(['--forget'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['forget'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert not os.path.exists(sysfs.snapshot)
     assert 'Removed' in capsys.readouterr().out
 
 
 def test_forget_says_so_when_there_is_nothing(sysfs, capsys):
-    usbman.cli.run(['--forget'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['forget'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert 'no snapshot' in capsys.readouterr().out
 
 
 def test_setting_a_channel_by_a_disconnected_serial(sysfs, hub):
     """The point of the whole feature: switch on a board which is off, by name."""
     write(sysfs.snapshot, '3 GONEAWAY\n')
-    usbman.cli.run(['--set', 'GONEAWAY'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['switch', '--on', 'GONEAWAY'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert hub.state == 0b100
 
 
 def listing(capsys):
-    usbman.cli.run(['--list'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['list'], device_path='/dev/fake', setup_logging=lambda level: None)
     return capsys.readouterr().out
 
 
@@ -224,5 +224,5 @@ def test_list_works_without_a_snapshot(sysfs, capsys):
 
 def test_a_client_may_list(sysfs, capsys):
     """Read only, and answered from the server's own tree and file, so it is not local only."""
-    usbman.cli.run(['--list'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
+    usbman.cli.run(['list'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
     assert 'live' in capsys.readouterr().out

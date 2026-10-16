@@ -96,28 +96,26 @@ def test_decode_result_raises_when_the_hub_says_nothing():
 @pytest.mark.parametrize(
     ('args', 'expected'),
     [
-        ([], (None, None, None)),
-        (['--set', '1'], (None, None, None)),
-        (['--device', '/dev/ttyUSB1'], ('/dev/ttyUSB1', None, None)),
-        (['--serve'], (None, '', None)),
-        (['--serve', '1.2.3.4:5'], (None, '1.2.3.4:5', None)),
-        (['--serve', '--set', '1'], (None, '', None)),  # an option cannot be the value
-        (['--connect', 'h:1'], (None, None, 'h:1')),
-        (['--connect=h:1'], (None, None, 'h:1')),
+        ([], (None, None)),
+        (['switch', '--on', '1'], (None, None)),
+        (['--device', '/dev/ttyUSB1'], ('/dev/ttyUSB1', None)),
+        (['serve', '1.2.3.4:5'], (None, None)),  # a command now, not a transport option
+        (['--connect', 'h:1'], (None, 'h:1')),
+        (['--connect=h:1'], (None, 'h:1')),
     ],
 )
 def test_split_transport_recognises_its_options(args, expected):
     transport, _ = split_transport(args)
-    assert (transport.device, transport.serve, transport.connect) == expected
+    assert (transport.device, transport.connect) == expected
 
 
 @pytest.mark.parametrize(
     ('args', 'forwarded'),
     [
-        (['--set', '1', '5'], ['--set', '1', '5']),
-        (['--connect', 'h:1', '--set', '1'], ['--set', '1']),
-        (['--set', '1', '--connect', 'h:1'], ['--set', '1']),
-        (['--timeout', '5', '--clear', 'all'], ['--clear', 'all']),
+        (['switch', '--on', '1', '5'], ['switch', '--on', '1', '5']),
+        (['--connect', 'h:1', 'switch', '--on', '1'], ['switch', '--on', '1']),
+        (['switch', '--on', '1', '--connect', 'h:1'], ['switch', '--on', '1']),
+        (['--timeout', '5', 'switch', '--off', 'all'], ['switch', '--off', 'all']),
         # the hub command keeps everything the transport parser does not claim
         (['--save', '--toff', '0.5', '--log-level', 'DEBUG'], ['--save', '--toff', '0.5', '--log-level', 'DEBUG']),
     ],
@@ -128,27 +126,13 @@ def test_split_transport_forwards_the_rest_untouched(args, forwarded):
 
 
 def test_split_transport_leaves_hub_abbreviations_alone():
-    """`allow_abbrev` is off there, so `--t` reaches the hub parser as `--toff`.
+    """`allow_abbrev` is off there, so `--t` reaches the command parser as `reset`'s `--toff`.
 
     The transport parser really does have a `--timeout` which would otherwise claim it.
     """
-    _, argv = split_transport(['--t', '0.5'])
-    assert argv == ['--t', '0.5']
+    _, argv = split_transport(['reset', '1', '--t', '0.5'])
+    assert argv == ['reset', '1', '--t', '0.5']
     assert cli.build_parser().parse_args(argv).toff == 0.5
-
-
-def test_clr_is_an_alias_of_clear():
-    assert cli.build_parser().parse_args(['--clr', '1', '5']).clear == ['1', '5']
-
-
-@pytest.mark.parametrize('abbreviation', ['--c', '--cl', '--s'])
-def test_the_new_names_cost_some_abbreviations(abbreviation):
-    """`--c` and `--cl` match both `--clear` and `--clr`, `--s` matches `--set` and `--save`.
-
-    Pinned deliberately, so the price of the new names is recorded rather than rediscovered.
-    """
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args([abbreviation, '1'])
 
 
 def test_timeout_defaults_to_blocking_forever():
@@ -197,7 +181,7 @@ def test_the_version_is_the_one_the_package_reports():
 def test_help_mentions_the_transport_options():
     """They are not in the parser, so only the epilog can tell the user they exist."""
     text = cli.build_parser().format_help()
-    for option in ('--device', '--serve', '--connect', '--timeout', 'USBMAN_SERVER'):
+    for option in ('--device', '--connect', '--timeout', 'USBMAN_SERVER'):
         assert option in text
 
 
@@ -205,3 +189,31 @@ def test_device_path_is_gone_from_the_hub_parser():
     parser = cli.build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(['--device-path', '/dev/ttyUSB0'])
+
+
+def test_no_command_means_print_the_state():
+    assert cli.build_parser().parse_args([]).command is None
+
+
+def test_save_is_both_a_command_and_a_modifier():
+    """`save` stores what the hub holds; `--save` stores what the command just produced."""
+    assert cli.build_parser().parse_args(['save']).command == 'save'
+    for command in (['only', '1'], ['switch', '--on', '1'], ['reset', '1']):
+        assert cli.build_parser().parse_args([*command, '--save']).save is True
+
+
+def test_each_command_owns_its_modifiers():
+    """The whole point of subcommands: a modifier cannot reach a command which ignores it."""
+    for argv in (['list', '--toff', '5'], ['only', '1', '--settle', '5'], ['save', '--toff', '5']):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(argv)
+
+
+def test_only_one_command_at_a_time():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(['list', 'snapshot'])
+
+
+def test_log_level_is_accepted_before_or_after_the_command():
+    assert cli.build_parser().parse_args(['--log-level', 'DEBUG', 'list']).log_level == 'DEBUG'
+    assert cli.build_parser().parse_args(['list', '--log-level', 'DEBUG']).log_level == 'DEBUG'

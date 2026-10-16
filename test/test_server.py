@@ -50,7 +50,7 @@ def run_locally(arguments):
 def server(free_port):
     """A usbman server in its own process, serving an in memory hub."""
     process = subprocess.Popen(
-        [sys.executable, RUNNER, ALL_OFF, '--serve', f'127.0.0.1:{free_port}', '--device', '/dev/fake'],
+        [sys.executable, RUNNER, ALL_OFF, 'serve', f'127.0.0.1:{free_port}', '--device', '/dev/fake'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -76,16 +76,16 @@ def server(free_port):
     'arguments',
     [
         [],
-        ['--set', '1', '5'],
-        ['--on', '2', '3'],
-        ['--on', '1', '--set', '3'],  # refused combination
-        ['--clear', 'all'],
-        ['--set', '2', '3', '5', '--save'],
-        ['--off-pulse', '1', '--toff', '0.05'],
-        ['--set', '1', '--clear', '1'],  # conflict, reported through logging
-        ['--set', '8'],  # argparse error, written straight to stderr
+        ['switch', '--on', '1', '5'],
+        ['only', '2', '3'],
+        ['only', '1', 'switch', '--on', '3'],  # refused combination
+        ['switch', '--off', 'all'],
+        ['switch', '--on', '2', '3', '5', '--save'],
+        ['reset', '1', '--toff', '0.05'],
+        ['switch', '--on', '1', 'switch', '--off', '1'],  # conflict, reported through logging
+        ['switch', '--on', '8'],  # argparse error, written straight to stderr
         ['--help'],
-        ['--log-level', 'DEBUG', '--set', '1'],
+        ['--log-level', 'DEBUG', 'switch', '--on', '1'],
     ],
 )
 def test_remote_is_identical_to_local(server, arguments):
@@ -99,10 +99,10 @@ def test_remote_is_identical_to_local(server, arguments):
 
 
 def test_usbman_server_environment_variable_is_equivalent_to_connect(server):
-    expected = run_locally(['--set', '1', '5'])
+    expected = run_locally(['switch', '--on', '1', '5'])
     child = environment()
     child['USBMAN_SERVER'] = f'127.0.0.1:{server}'
-    through_environment = run_usbman(['--set', '1', '5'], env=child)
+    through_environment = run_usbman(['switch', '--on', '1', '5'], env=child)
     assert through_environment.stdout == expected.stdout
     assert through_environment.returncode == expected.returncode
 
@@ -110,25 +110,25 @@ def test_usbman_server_environment_variable_is_equivalent_to_connect(server):
 def test_an_empty_usbman_server_goes_back_to_local(server):
     child = environment()
     child['USBMAN_SERVER'] = ''
-    result = run_usbman(['--device', '/dev/fake', '--set', '1'], env=child)
+    result = run_usbman(['--device', '/dev/fake', 'switch', '--on', '1'], env=child)
     assert result.returncode == 0
-    assert result.stdout == run_locally(['--set', '1']).stdout
+    assert result.stdout == run_locally(['switch', '--on', '1']).stdout
 
 
 def test_device_cannot_be_given_to_a_client(server):
-    result = run_usbman(['--connect', f'127.0.0.1:{server}', '--device', '/dev/ttyUSB9', '--set', '1'])
+    result = run_usbman(['--connect', f'127.0.0.1:{server}', '--device', '/dev/ttyUSB9', 'switch', '--on', '1'])
     assert result.returncode == 255  # sys.exit(-1)
     assert '--device cannot be used with --connect' in result.stderr
 
 
 def test_channel_of_resolves_on_the_server(server):
     """The devices and the hub are both on the server, so it must resolve there, not here."""
-    result = run_usbman(['--connect', f'127.0.0.1:{server}', '--channel-of', 'NOSUCHSERIAL'])
+    result = run_usbman(['--connect', f'127.0.0.1:{server}', 'channel-of', 'NOSUCHSERIAL'])
     assert result.returncode == 255
     assert "serial number 'NOSUCHSERIAL'" in result.stderr
 
 
-@pytest.mark.parametrize('option', ['--snapshot', '--forget'])
+@pytest.mark.parametrize('option', ['snapshot', 'forget'])
 def test_the_local_only_options_are_refused_over_the_socket(server, option):
     """They write to the machine the hub is on, so a client must not be able to ask for them."""
     result = run_usbman(['--connect', f'127.0.0.1:{server}', option])
@@ -137,7 +137,7 @@ def test_the_local_only_options_are_refused_over_the_socket(server, option):
 
 
 def test_an_unreachable_server_is_reported_without_a_traceback(free_port):
-    result = run_usbman(['--connect', f'127.0.0.1:{free_port}', '--set', '1'])
+    result = run_usbman(['--connect', f'127.0.0.1:{free_port}', 'switch', '--on', '1'])
     assert result.returncode == 255
     assert 'Traceback' not in result.stderr
     assert 'cannot reach the usbman server' in result.stderr
@@ -157,20 +157,20 @@ def talk(port, *requests, timeout=10):
 
 
 def test_the_protocol_is_usable_by_hand(server):
-    answer = talk(server, '--set 1 3')
+    answer = talk(server, 'switch --on 1 3')
     assert 'O On: 1 3 \n' in answer
     assert answer.endswith('EXIT 0\n')
 
 
 def test_several_requests_share_one_connection(server):
-    answer = talk(server, '--clear all', '--set 1', '')
+    answer = talk(server, 'switch --off all', 'switch --on 1', '')
     assert answer.count('EXIT 0') == 3
     assert 'O All off\n' in answer
     assert 'O On: 1 \n' in answer
 
 
 def test_an_unbalanced_quote_is_an_error_and_not_a_disconnection(server):
-    answer = talk(server, '--set "1', '--set 1')
+    answer = talk(server, 'switch --on "1', 'switch --on 1')
     assert 'EXIT 2' in answer
     assert answer.endswith('EXIT 0\n')  # the connection carried on afterwards
 
@@ -182,7 +182,7 @@ def test_garbage_does_not_upset_the_server(server):
 
 
 def test_an_oversized_request_is_refused(server):
-    answer = talk(server, '--set ' + 'x' * 5000)
+    answer = talk(server, 'switch --on ' + 'x' * 5000)
     assert 'request longer than' in answer
     assert 'EXIT 2' in answer
 
@@ -190,7 +190,7 @@ def test_an_oversized_request_is_refused(server):
 def test_a_disconnected_client_does_not_abort_the_pulse(server):
     """The channels must come back on even though nobody is listening any more."""
     with socket.create_connection(('127.0.0.1', server), timeout=10) as connection:
-        connection.sendall(b'--off-pulse all --toff 1.5\n')
+        connection.sendall(b'reset all --toff 1.5\n')
         time.sleep(0.4)  # mid pulse, with the channels off
     time.sleep(2.0)
     assert talk(server, '').count('On: 1 2 3 4 5 6 7') == 1

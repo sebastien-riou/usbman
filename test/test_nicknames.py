@@ -30,13 +30,13 @@ def test_a_nickname_works_for_a_device_which_is_off(sysfs):
 def test_a_nickname_switches_the_right_channel(sysfs, hub):
     write(sysfs.nicknames, 'numaker NUMAKER123\n')
     write(sysfs.snapshot, '3 NUMAKER123\n')
-    usbman.cli.run(['--set', 'numaker'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['switch', '--on', 'numaker'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert hub.state == 0b100
 
 
 def test_nicknames_mix_with_channel_numbers(sysfs, hub):
     write(sysfs.nicknames, f'stlink {STLINK}\n')
-    usbman.cli.run(['--on', 'stlink', '5'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['only', 'stlink', '5'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert hub.state == 0b10001  # channel 1 for the ST-LINK, and channel 5
 
 
@@ -97,14 +97,14 @@ def test_the_first_alphabetically_is_shown_for_a_device_with_several(sysfs):
 
 def test_list_shows_the_nickname(sysfs, capsys):
     write(sysfs.nicknames, f'stlink {STLINK}\n')
-    usbman.cli.run(['--list'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['list'], device_path='/dev/fake', setup_logging=lambda level: None)
     out = capsys.readouterr().out
     assert 'nickname' in out.splitlines()[0]
     assert any('stlink' in line and STLINK in line for line in out.splitlines())
 
 
 def test_list_shows_a_dash_where_there_is_no_nickname(sysfs, capsys):
-    usbman.cli.run(['--list'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['list'], device_path='/dev/fake', setup_logging=lambda level: None)
     out = capsys.readouterr().out
     assert any(STLINK in line and ' - ' in line for line in out.splitlines())
 

@@ -33,28 +33,28 @@ def test_state_is_reported_on_stdout(hub, routing):
 
 
 def test_every_channel_is_listed(hub, routing):
-    lines, _ = run(['--set', 'all'], routing)
+    lines, _ = run(['switch', '--on', 'all'], routing)
     out, _ = streams(lines)
     assert out == 'On: 1 2 3 4 5 6 7 \n'
 
 
 def test_trailing_space_survives_the_framing(hub, routing):
     """`print('On: ', end='')` leaves a trailing space which must reach the client."""
-    lines, _ = run(['--set', '1', '3'], routing)
+    lines, _ = run(['switch', '--on', '1', '3'], routing)
     assert 'O On: 1 3 \n' in lines
 
 
 def test_channels_are_switched(hub, routing):
-    run(['--set', 'all'], routing)
+    run(['switch', '--on', 'all'], routing)
     assert hub.state == 0x7F
-    run(['--clear', '1', '4', '6', '7'], routing)
+    run(['switch', '--off', '1', '4', '6', '7'], routing)
     assert hub.state == 0x16
 
 
 def test_on_decides_every_channel(hub, routing):
     """Unlike --set, which only adds, --on turns everything else off."""
-    run(['--set', 'all'], routing)
-    lines, code = run(['--on', '2'], routing)
+    run(['switch', '--on', 'all'], routing)
+    lines, code = run(['only', '2'], routing)
     out, _ = streams(lines)
     assert code == 0
     assert out == 'On: 2 \n'
@@ -62,36 +62,41 @@ def test_on_decides_every_channel(hub, routing):
 
 
 def test_set_and_clear_leave_the_other_channels_alone(hub, routing):
-    run(['--on', '1', '3'], routing)
-    run(['--set', '5'], routing)
+    run(['only', '1', '3'], routing)
+    run(['switch', '--on', '5'], routing)
     assert hub.state == 0b10101
-    run(['--clear', '1'], routing)
+    run(['switch', '--off', '1'], routing)
     assert hub.state == 0b10100
 
 
-def test_clr_behaves_like_clear(hub, routing):
-    run(['--on', 'all'], routing)
-    run(['--clr', '2'], routing)
-    assert hub.state == 0x7F & ~0b10
-
-
-@pytest.mark.parametrize('rest', [['--set', '3'], ['--clear', '3'], ['--clr', '3'], ['--off-pulse', '3']])
-def test_on_refuses_to_be_combined(hub, routing, rest):
-    lines, code = run(['--on', '1', *rest], routing)
+@pytest.mark.parametrize(
+    'argv',
+    [
+        ['only', '1', 'switch', '--on', '3'],  # two commands at once
+        ['only', '1', '--on', '3'],  # --on belongs to switch, not only
+        ['only', '1', '--toff', '2'],  # --toff belongs to reset
+        ['list', 'snapshot'],  # used to run `list` and ignore `snapshot` in silence
+        ['list', '--toff', '5'],  # used to accept --toff and ignore it
+        ['characterize', '--save'],
+    ],
+)
+def test_argparse_refuses_what_used_to_pass_silently(hub, routing, argv):
+    """One command, and only the options that command has. The parser enforces both now."""
+    lines, code = run(argv, routing)
     _, err = streams(lines)
-    assert code == -1
-    assert 'cannot be combined' in err
+    assert code == 2
     assert hub.commands == []  # refused before anything reached the hub
+    assert err
 
 
 def test_on_may_still_be_saved(hub, routing):
-    _, code = run(['--on', '1', '3', '--save'], routing)
+    _, code = run(['only', '1', '3', '--save'], routing)
     assert code == 0
     assert hub.saved == 0b101
 
 
 def test_channel_of_prints_the_channel(hub, routing, sysfs):
-    lines, code = run(['--channel-of', '004B00283532510831333430'], routing)
+    lines, code = run(['channel-of', '004B00283532510831333430'], routing)
     out, _ = streams(lines)
     assert code == 0
     assert out == '1\n'
@@ -99,26 +104,26 @@ def test_channel_of_prints_the_channel(hub, routing, sysfs):
 
 def test_channel_of_needs_no_hub(hub, routing, sysfs):
     """It reads sysfs only, so it answers with no device path and nothing to detect."""
-    lines, code = run(['--channel-of', sysfs.path('ttyACM0')], routing, device_path=None)
+    lines, code = run(['channel-of', sysfs.path('ttyACM0')], routing, device_path=None)
     out, _ = streams(lines)
     assert (code, out) == (0, '1\n')
     assert hub.commands == []
 
 
 def test_a_device_reference_works_wherever_a_channel_does(hub, routing, sysfs):
-    run(['--on', 'all'], routing)
-    run(['--clear', sysfs.path('ttyACM0')], routing)
+    run(['only', 'all'], routing)
+    run(['switch', '--off', sysfs.path('ttyACM0')], routing)
     assert hub.state == 0x7F & ~0b1  # the ST-LINK is on channel 1
 
 
 def test_references_and_numbers_mix(hub, routing, sysfs):
-    run(['--on', 'all'], routing)
-    run(['--clear', '004B00283532510831333430', '3'], routing)
+    run(['only', 'all'], routing)
+    run(['switch', '--off', '004B00283532510831333430', '3'], routing)
     assert hub.state == 0x7F & ~0b101
 
 
 def test_an_unresolvable_reference_is_reported(hub, routing, sysfs):
-    lines, code = run(['--clear', 'NOSUCH'], routing)
+    lines, code = run(['switch', '--off', 'NOSUCH'], routing)
     _, err = streams(lines)
     assert code == -1
     assert 'NOSUCH' in err
@@ -126,7 +131,7 @@ def test_an_unresolvable_reference_is_reported(hub, routing, sysfs):
 
 
 def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
-    _, code = run(['--set', '2', '3', '5', '--save'], routing)
+    _, code = run(['switch', '--on', '2', '3', '5', '--save'], routing)
     assert code == 0
     assert hub.saved == 0x16
     assert hub.commands[-1] == 'WPpass    \r'
@@ -134,7 +139,7 @@ def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
 
 def test_errors_reach_the_client_on_stderr(hub, routing):
     """They are reported through logging, so capturing the stdout alone would lose them."""
-    lines, code = run(['--set', '1', '--clear', '1'], routing)
+    lines, code = run(['switch', '--on', '1', '--off', '1'], routing)
     out, err = streams(lines)
     assert code == -1
     assert out == ''
@@ -143,7 +148,7 @@ def test_errors_reach_the_client_on_stderr(hub, routing):
 
 def test_argparse_errors_reach_the_client_too(hub, routing):
     """argparse writes straight to stderr and exits, bypassing logging entirely."""
-    lines, code = run(['--set', '8'], routing)
+    lines, code = run(['switch', '--on', '8'], routing)
     out, err = streams(lines)
     assert code == 2
     assert 'invalid channel' in err
@@ -158,11 +163,19 @@ def test_help_is_served(hub, routing):
 
 def test_transport_options_are_refused_inside_a_request(hub, routing):
     """The server owns the hub and is not a client, so these cannot be forwarded."""
-    for argv in (['--serve'], ['--connect', 'h:1'], ['--device', '/dev/ttyUSB1']):
+    for argv in (['--connect', 'h:1'], ['--device', '/dev/ttyUSB1']):
         lines, code = run(argv, routing)
         _, err = streams(lines)
         assert code == 2
-        assert 'unrecognized arguments' in err
+        assert err  # argparse says so, whichever way it words it
+
+
+def test_serve_is_refused_inside_a_request(hub, routing):
+    """A client must not be able to make the server start another server."""
+    lines, code = run(['serve'], routing)
+    _, err = streams(lines)
+    assert code == -1
+    assert 'acts on the machine the hub is attached to' in err
 
 
 def test_log_level_of_the_request_is_honoured(hub, routing):
@@ -186,7 +199,7 @@ def test_a_hub_failure_becomes_an_exit_code_not_a_crash(hub, routing, monkeypatc
         raise OSError('the port went away')
 
     monkeypatch.setattr(usbman, 'serial_command_response', broken)
-    lines, code = run(['--set', '1'], routing)
+    lines, code = run(['switch', '--on', '1'], routing)
     _, err = streams(lines)
     assert code == -2  # could not communicate, reported rather than raised
     assert 'went away' in err or 'Could not communicate' in err
@@ -194,7 +207,7 @@ def test_a_hub_failure_becomes_an_exit_code_not_a_crash(hub, routing, monkeypatc
 
 def test_requests_are_serialised(hub, routing):
     """The lock spans the whole request: two pulses must not interleave mid pulse."""
-    pulse = ['--off-pulse', 'all', '--toff', '0.2']
+    pulse = ['reset', 'all', '--toff', '0.2']
     started = time.monotonic()
     # installed once around every thread: the routing is process wide, so the threads must not
     # each install and restore it, which is also how the server uses it.

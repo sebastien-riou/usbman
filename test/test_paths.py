@@ -10,7 +10,7 @@ STLINK = '004B00283532510831333430'
 
 
 def paths(capsys, reference):
-    usbman.cli.run(['--path-of', reference], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['path-of', reference], device_path='/dev/fake', setup_logging=lambda level: None)
     return capsys.readouterr().out.split()
 
 
@@ -30,7 +30,7 @@ def test_several_ports_are_warned_about_on_stderr(sysfs, capsys, caplog):
 
 def test_only_the_paths_go_to_stdout(sysfs, capsys):
     """So that `$(usbman --path-of x)` substitutes cleanly into another command."""
-    usbman.cli.run(['--path-of', '7'], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['path-of', '7'], device_path='/dev/fake', setup_logging=lambda level: None)
     assert capsys.readouterr().out == '/dev/ttyUSB0\n'
 
 
@@ -62,17 +62,17 @@ def test_all_is_refused(sysfs, capsys):
 
 def test_an_invalid_channel_is_refused_by_the_parser(sysfs):
     with pytest.raises(SystemExit):
-        usbman.cli.build_parser().parse_args(['--path-of', '8'])
+        usbman.cli.build_parser().parse_args(['path-of', '8'])
 
 
 def test_a_client_may_ask_for_a_path(sysfs, capsys):
     """Read only, and the devices are on the server, so it answers from there."""
-    usbman.cli.run(['--path-of', '7'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
+    usbman.cli.run(['path-of', '7'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
     assert capsys.readouterr().out == '/dev/ttyUSB0\n'
 
 
 def id_paths(capsys, reference):
-    usbman.cli.run(['--id-path-of', reference], device_path='/dev/fake', setup_logging=lambda level: None)
+    usbman.cli.run(['id-path-of', reference], device_path='/dev/fake', setup_logging=lambda level: None)
     return capsys.readouterr().out.split()
 
 

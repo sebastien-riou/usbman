@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 
@@ -45,9 +46,8 @@ EXIT_NO_COMMUNICATION = -2
 
 # The options below are consumed before the hub command parser runs, by `split_transport` in
 # usbman/server.py, so they do not appear in the help argparse generates.
-TRANSPORT_HELP = """transport options, which must be spelled in full:
+TRANSPORT_HELP = """transport options, which go before the command and must be spelled in full:
   --device PATH        serial device of the hub, auto detected when not given
-  --serve [HOST:PORT]  serve the commands above on a socket, default 127.0.0.1:9877
   --connect HOST:PORT  send the command to a usbman server instead of a local hub
   --timeout SECONDS    socket timeout, -1 (the default) blocks forever
 
@@ -108,9 +108,11 @@ def main():
     from usbman.server import DEFAULT_ENDPOINT, peek_log_level, request, serve, split_transport
 
     try:
-        transport, argv = split_transport(sys.argv[1:])
-        if transport.serve is not None:
-            sys.exit(serve(transport.serve or DEFAULT_ENDPOINT, argv, transport.device, transport.timeout))
+        transport, rest = split_transport(sys.argv[1:])
+        # After the transport scan, so that a `--timeout -1` has already been taken and cannot
+        # be read as "channel 1 off".
+        argv = expand_shorthand(rest)
+
         target = transport.connect or os.environ.get('USBMAN_SERVER') or None
         if target is not None:
             # `--log-level` is forwarded to the server as well, it is only peeked at here so
@@ -119,104 +121,155 @@ def main():
             configure_logging(peek_log_level(argv))
             if transport.device is not None:
                 raise RuntimeError('--device cannot be used with --connect, the server owns the hub')
+            # Forwarded unparsed, so the server stays the authority on what a command means.
             sys.exit(request(target, argv, transport.timeout))
-        # Deliberately no configure_logging here: it would make the one inside `run` a no op
-        # and so silently kill `--log-level` for the plain command line.
-        run(argv, device_path=transport.device)
+
+        args = build_parser().parse_args(argv)
+        if args.command == 'serve':
+            configure_logging(args.log_level)
+            sys.exit(serve(args.endpoint or DEFAULT_ENDPOINT, transport.device, transport.timeout))
+        # Deliberately no configure_logging here: it would make the one inside `run_parsed` a
+        # no op and so silently kill `--log-level` for the plain command line.
+        run_parsed(args, device_path=transport.device)
     except RuntimeError as e:
         logging.error(f'{e}')
         sys.exit(EXIT_ERROR)
 
 
+COMMANDS = (
+    'only',
+    'switch',
+    'reset',
+    'save',
+    'channel-of',
+    'path-of',
+    'id-path-of',
+    'list',
+    'snapshot',
+    'forget',
+    'characterize',
+    'serve',
+)
+
+# Commands which act on the machine the hub is attached to: they write a file here, start a
+# server here, or ask someone standing at the hub to move a peripheral. A request arriving
+# over the socket is refused one of these.
+LOCAL_ONLY = ('snapshot', 'forget', 'characterize', 'serve')
+
+SHORTHAND = re.compile(r'^([+-])(.+)$')
+
+
+def expand_shorthand(argv) -> list:
+    """Turn a bare `+1 -3` into `switch --on 1 --off 3`, leaving anything else alone.
+
+    argparse cannot do this itself: it reads `-3` as an option and fails, and its own handling
+    of negative numbers only covers digits, so `-numaker` would break anyway.
+
+    Only a command line which names no command is rewritten. That is what stops
+    `characterize --settle -1` from being mangled, and it goes on holding for any option which
+    comes to take a negative number. `-h` and the long options are never shorthand, so the help
+    survives; a nickname called exactly `h` is the one thing this cannot express.
+    """
+    if any(token in COMMANDS for token in argv):
+        return list(argv)
+    on, off, rest = [], [], []
+    for token in argv:
+        match = None if token == '-h' or token.startswith('--') else SHORTHAND.match(token)
+        if match is None:
+            rest.append(token)
+        elif match.group(1) == '+':
+            on.append(match.group(2))
+        else:
+            off.append(match.group(2))
+    if not on and not off:
+        return list(argv)
+    return ['switch', *(['--on', *on] if on else []), *(['--off', *off] if off else []), *rest]
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the parser of the hub commands, the one source of the command line grammar."""
-    parser = argparse.ArgumentParser(
-        'usbman', epilog=TRANSPORT_HELP, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument('--log-level', default='INFO', choices=LOG_LEVELS)
-    # Through --connect this reports the server's version, as every forwarded option reports
-    # the server's answer. That is the useful one: it says what is really driving the hub.
-    parser.add_argument('--version', action='version', version=f'usbman {__version__}')
+    # `--log-level` on a parent, so that it is accepted before or after the command rather than
+    # only before it.
+    # `--log-level` is accepted before or after the command, so it is defined twice: once on
+    # the main parser, which carries the default, and once for the subcommands with SUPPRESS,
+    # so that a subcommand only sets it when it was actually given. Two separate actions on
+    # purpose — `parents=` shares one object, and a shared default would be written over the
+    # value the main parser had already parsed.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--log-level', default=argparse.SUPPRESS, choices=LOG_LEVELS)
 
-    channels_help = f"channel numbers, or '{ALL_CHANNELS}' for all of them"
-    parser.add_argument(
-        '--on',
-        default=[],
-        help=f'turn exactly these channel(s) on and every other one off: {channels_help}',
-        nargs='+',
-        type=channel,
-    )
-    parser.add_argument(
-        '--set',
-        default=[],
-        help=f'turn channel(s) on, leaving the others as they are: {channels_help}',
-        nargs='+',
-        type=channel,
-    )
-    # '--clr' is a real alias and not an abbreviation, '--clr' not being a prefix of '--clear'.
-    # It costs the abbreviations '--c' and '--cl', which become ambiguous between the two.
-    parser.add_argument(
-        '--clear',
-        '--clr',
-        default=[],
-        help=f'turn channel(s) off, leaving the others as they are: {channels_help}',
-        nargs='+',
-        type=channel,
-    )
-    parser.add_argument(
-        '--off-pulse', default=[], help=f'turn channel(s) off and on: {channels_help}', nargs='+', type=channel
-    )
-    parser.add_argument('--toff', default=1, help='off-pulse duration seconds', type=float)
-    parser.add_argument(
-        '--channel-of',
-        default=None,
-        metavar='DEVICE',
-        help='print the channel powering a device, named by path or USB serial number, and exit',
-        type=str,
-    )
-    parser.add_argument(
-        '--path-of',
-        default=None,
-        metavar='CHANNEL',
-        help='print the /dev path of the serial port(s) on a channel, named by number, nickname or serial',
-        type=channel,
-    )
-    parser.add_argument(
-        '--id-path-of',
-        default=None,
-        metavar='CHANNEL',
-        help='the same, as a stable /dev/serial/by-id path which survives re-plugging',
-        type=channel,
-    )
-    parser.add_argument(
-        '--list',
-        action='store_true',
-        help='show which device is on which channel, from the USB tree and from the snapshot',
-    )
-    parser.add_argument(
-        '--snapshot',
-        action='store_true',
-        help='record which channel each connected device is on, so it can be named while switched off',
-    )
-    parser.add_argument('--forget', action='store_true', help='delete the snapshot')
-    parser.add_argument(
-        '--characterize',
-        action='store_true',
-        help='work out the wiring of a hub model, to add it to usbman (see NOTES.md), needs a terminal',
-    )
-    parser.add_argument(
-        '--settle',
-        default=5.0,
-        help='seconds --characterize allows a peripheral to enumerate; raise it for a slow board',
-        type=float,
-    )
-    parser.add_argument(
+    # `--save` belongs to the commands which change the channels, and stores what they just
+    # produced. It is also a command of its own, for storing whatever the hub already holds.
+    switching = argparse.ArgumentParser(add_help=False, parents=[common])
+    switching.add_argument(
         '--save', action='store_true', help='store the resulting state as the one the hub powers up with'
     )
+
+    parser = argparse.ArgumentParser(
+        'usbman',
+        description=(
+            'Control a managed USB hub. With no command, print which channels are on.\n'
+            'As a shorthand, `usbman +1 +2 -3` is `usbman switch --on 1 2 --off 3`.'
+        ),
+        epilog=TRANSPORT_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('--log-level', default='INFO', choices=LOG_LEVELS)
+    parser.add_argument('--version', action='version', version=f'usbman {__version__}')
+    commands = parser.add_subparsers(dest='command', metavar='COMMAND')
+
+    channels_help = f"channel numbers, or '{ALL_CHANNELS}' for all of them"
+    reference_help = 'a channel number, a nickname, a USB serial number or a device path'
+
+    only = commands.add_parser(
+        'only', parents=[switching], help='turn exactly these channel(s) on and every other one off'
+    )
+    only.add_argument('channels', nargs='+', metavar='CHANNEL', help=channels_help, type=channel)
+
+    switch = commands.add_parser(
+        'switch',
+        parents=[switching],
+        help='turn channel(s) on and off, leaving the others as they are',
+        description='Also spelled `usbman +1 -3`, which means `usbman switch --on 1 --off 3`.',
+    )
+    switch.add_argument('--on', default=[], nargs='+', metavar='CHANNEL', help=channels_help, type=channel)
+    switch.add_argument('--off', default=[], nargs='+', metavar='CHANNEL', help=channels_help, type=channel)
+
+    reset = commands.add_parser(
+        'reset', parents=[switching], help='turn channel(s) off and back on, to power cycle what is on them'
+    )
+    reset.add_argument('channels', nargs='+', metavar='CHANNEL', help=channels_help, type=channel)
+    reset.add_argument('--toff', default=1, help='seconds to stay off', type=float)
+
+    commands.add_parser('save', parents=[common], help='store the current states as the ones the hub powers up with')
+
+    channel_of = commands.add_parser('channel-of', parents=[common], help='print the channel powering a device')
+    channel_of.add_argument('device', metavar='DEVICE', help=reference_help, type=str)
+
+    path_of = commands.add_parser('path-of', parents=[common], help='print the /dev path of the port on a channel')
+    path_of.add_argument('channel', metavar='CHANNEL', help=reference_help, type=channel)
+
+    id_path_of = commands.add_parser(
+        'id-path-of', parents=[common], help='the same, as a stable /dev/serial/by-id path'
+    )
+    id_path_of.add_argument('channel', metavar='CHANNEL', help=reference_help, type=channel)
+
+    commands.add_parser('list', parents=[common], help='show which device is on which channel')
+    commands.add_parser('snapshot', parents=[common], help='record which channel each connected device is on')
+    commands.add_parser('forget', parents=[common], help='delete the snapshot')
+
+    characterize = commands.add_parser(
+        'characterize', parents=[common], help="work out a hub model's wiring, to add it to usbman (see NOTES.md)"
+    )
+    characterize.add_argument('--settle', default=5.0, help='seconds to allow a peripheral to enumerate', type=float)
+
+    serve = commands.add_parser('serve', parents=[common], help='serve the commands above on a socket')
+    serve.add_argument('endpoint', nargs='?', default=None, metavar='HOST:PORT', help='default 127.0.0.1:9877')
+
     return parser
 
 
-def print_paths(channel: int, by_id: bool = False) -> None:
+def print_paths(channel: int, *, by_id: bool = False) -> None:
     """Print the path of every serial port on a channel, one per line.
 
     One per line so that the usual case substitutes straight into another command. When there
@@ -342,53 +395,53 @@ def print_characterization(sockets) -> None:
 
 
 def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logging):
-    """Run one hub command.
+    """Parse a command line and run it. The server calls this with a client's arguments.
 
-    `local` is false for a request which arrived over a socket: the options which write to
-    this machine are refused then, while resolving a device against it stays available.
-
-    `device_path` comes from the caller, never from `argv`: locally from the `--device`
-    transport option, in a server from the device it resolved at startup. It is resolved here
-    rather than by the caller when it is `None`, so that the auto detection message obeys the
-    `--log-level` of this very command.
+    The shorthand is expanded here as well as in `main`, so that `+1 -3` works when typed
+    straight at the server with `nc` and not only through the client. Expanding twice is
+    harmless: an expanded command line names a command, which the expansion leaves alone.
     """
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    argv = expand_shorthand(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(argv)
+    return run_parsed(args, device_path=device_path, local=local, setup_logging=setup_logging)
 
+
+def run_parsed(args, *, device_path=None, local=True, setup_logging=configure_logging):
+    """Run one already parsed command.
+
+    `local` is false for a request which arrived over a socket: the commands which act on this
+    machine are refused then, while asking it about a device stays available.
+
+    `device_path` comes from the caller, never from the command line: locally from the
+    `--device` transport option, in a server from the device it resolved at startup. It is
+    resolved here rather than by the caller when it is `None`, so that the auto detection
+    message obeys the `--log-level` of this very command.
+    """
     setup_logging(args.log_level)
-
     logging.debug(f'args = {args}')
 
-    local_only = [name for name in ('snapshot', 'forget', 'characterize') if getattr(args, name)]
-    if local_only and not local:
-        names = ', '.join(f'--{name}' for name in local_only)
-        logging.error(f'{names} acts on the machine the hub is attached to, it cannot be asked for from here')
+    if args.command in LOCAL_ONLY and not local:
+        logging.error(f'{args.command} acts on the machine the hub is attached to, it cannot be asked for from here')
         sys.exit(EXIT_ERROR)
 
-    for option, reference in (('--path-of', args.path_of), ('--id-path-of', args.id_path_of)):
-        if reference is None:
-            continue
-        if reference == ALL_CHANNELS:
-            logging.error(f'{option} takes one channel, not {ALL_CHANNELS!r}')
-            sys.exit(EXIT_ERROR)
-        print_paths(one_channel(reference), by_id=option == '--id-path-of')
+    # Answered from sysfs and the snapshot alone, so they work with the hub unplugged and for a
+    # device which is switched off and therefore invisible.
+    if args.command == 'channel-of':
+        print(resolve_channel(args.device))
         return
-
-    if args.list:
+    if args.command in ('path-of', 'id-path-of'):
+        if args.channel == ALL_CHANNELS:
+            logging.error(f'{args.command} takes one channel, not {ALL_CHANNELS!r}')
+            sys.exit(EXIT_ERROR)
+        print_paths(one_channel(args.channel), by_id=args.command == 'id-path-of')
+        return
+    if args.command == 'list':
         print_listing(live_devices(), read_snapshot_entries())
         return
-
-    if args.snapshot:
-        if args.on or args.set or args.clear or args.off_pulse or args.save:
-            # Switching and recording in one command would record the state before the boards
-            # that just came back have finished enumerating, which is the failure that broke
-            # the first --characterize. Two commands, with the wait in between.
-            logging.error('--snapshot records what is already connected, run it after the command which switches')
-            sys.exit(EXIT_ERROR)
+    if args.command == 'snapshot':
         print_snapshot(*capture_snapshot())
         return
-
-    if args.forget:
+    if args.command == 'forget':
         path = snapshot_path()
         try:
             os.remove(path)
@@ -397,34 +450,21 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
             print(f'There was no snapshot at {path}')
         return
 
-    if args.channel_of is not None:
-        # Pure sysfs and the snapshot: no hub is opened, so this answers even with the hub
-        # unplugged, and for a device which is switched off and therefore invisible.
-        print(resolve_channel(args.channel_of))
-        return
-
-    # Resolve and check every argument first. None of this needs the hub, so a bad channel or
-    # an unknown device says so instead of hiding behind "no managed USB hub found".
-    exclusive = channel_set(args.on)
-    to_set = channel_set(args.set)
-    to_clear = channel_set(args.clear)
-    to_pulse = channel_set(args.off_pulse)
-    if exclusive and (to_set or to_clear or to_pulse):
-        # A pulse ends with its channels on whatever they were, so it would contradict --on
-        # just as --set and --clear do.
-        logging.error('--on cannot be combined with --set, --clear or --off-pulse, it alone decides every channel')
-        sys.exit(EXIT_ERROR)
-    conflicts = set.intersection(to_set, to_clear)
-    if conflicts:
-        logging.error(f'--set and --clear are conflicting for channels {conflicts}')
-        sys.exit(EXIT_ERROR)
-    if args.characterize and (exclusive or to_set or to_clear or to_pulse or args.save):
-        logging.error('--characterize switches every channel itself, it takes no other channel option')
-        sys.exit(EXIT_ERROR)
-    if args.characterize and not sys.stdin.isatty():
+    if args.command == 'characterize' and not sys.stdin.isatty():
         # It asks for a peripheral to be moved from socket to socket, so it cannot run down a
         # pipe, and in particular not as a request to a usbman server.
-        logging.error('--characterize has to ask you to move a peripheral, run it in a terminal')
+        logging.error('characterize has to ask you to move a peripheral, run it in a terminal')
+        sys.exit(EXIT_ERROR)
+
+    # Resolve the channels before looking for the hub. None of this needs it, so a bad channel
+    # or an unknown device says so instead of hiding behind "no managed USB hub found".
+    exclusive = channel_set(args.channels) if args.command == 'only' else set()
+    to_on = channel_set(args.on) if args.command == 'switch' else set()
+    to_off = channel_set(args.off) if args.command == 'switch' else set()
+    to_reset = channel_set(args.channels) if args.command == 'reset' else set()
+    conflicts = set.intersection(to_on, to_off)
+    if conflicts:
+        logging.error(f'--on and --off are conflicting for channels {conflicts}')
         sys.exit(EXIT_ERROR)
 
     if device_path is None:
@@ -435,7 +475,7 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
             sys.exit(EXIT_ERROR)
         logging.info(f'Using auto detected device {device_path}')
 
-    if args.characterize:
+    if args.command == 'characterize':
         print_characterization(characterize_hub(device_path, socket_prompt, args.settle))
         return
 
@@ -462,10 +502,10 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
         state = 0
         for i in exclusive:
             state |= 1 << (i - 1)
-        logging.debug(f'ON = {exclusive}, state = {state:#02x}')
-    for i in to_set:
+        logging.debug(f'only = {exclusive}, state = {state:#02x}')
+    for i in to_on:
         state |= 1 << (i - 1)
-    for i in to_clear:
+    for i in to_off:
         state &= ~(1 << (i - 1))
     logging.debug(f'org_state = {org_state:#02x}, state = {state:#02x}')
     if org_state != state:
@@ -475,19 +515,19 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
     else:
         current_state = org_state
 
-    if to_pulse:
-        for i in to_pulse:
+    if to_reset:
+        for i in to_reset:
             state &= ~(1 << (i - 1))
         tmp_state = set_state(device_path, state)
         logging.debug(f'tmp_state = {tmp_state:#02x}')
         time.sleep(args.toff)
-        for i in to_pulse:
+        for i in to_reset:
             state |= 1 << (i - 1)
         current_state = set_state(device_path, state)
         logging.debug(f'current_state = {current_state:#02x}')
 
-    # Last, so that the state saved is the one every other argument has just produced.
-    if args.save:
+    # Last, so that the state saved is the one the command has just produced.
+    if args.command == 'save' or getattr(args, 'save', False):
         current_state = save_state(device_path)
         logging.debug(f'saved_state = {current_state:#02x}')
 
