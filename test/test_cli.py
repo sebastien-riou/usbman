@@ -73,7 +73,7 @@ def test_set_state_wire_format_is_unchanged_for_every_state(hub):
     ('reply', 'state'),
     [
         (b'FFFFFFFF\r\n', 0x7F),  # what GP really answers, no prefix
-        (b'G03FFFFFF\r\n', 0x03),  # what WP answers, with the prefix
+        (b'G03FFFFFF\r\n', 0x03),  # behind a G, which is stripped
         (b'E5FFFFFF\r\n', 0x65),  # a state which merely starts with an E
         (b'EFFFFFFF\r\n', 0x6F),
     ],
@@ -91,6 +91,34 @@ def test_decode_result_raises_on_errors(reply, reason):
 def test_decode_result_raises_when_the_hub_says_nothing():
     with pytest.raises(RuntimeError, match='did not answer'):
         usbman.decode_result(b'')
+
+
+@pytest.mark.parametrize('reply', [b'G\r\n', b'?\r\n', b'ZZFFFFFF\r\n'])
+def test_decode_result_reports_a_reply_without_states(reply):
+    """As an error the command line reports, not as a traceback."""
+    with pytest.raises(RuntimeError, match='holds no channel states'):
+        usbman.decode_result(reply)
+
+
+def hub_answering(monkeypatch, reply):
+    """Make the hub answer every command with `reply`."""
+    monkeypatch.setattr(usbman, 'serial_command_response', lambda device_path, **kwargs: reply)
+
+
+def test_save_state_accepts_the_bare_g_a_real_hub_answers(monkeypatch):
+    """Seen on the wire: unlike `GP`, `WP` answers no states at all."""
+    hub_answering(monkeypatch, b'G\r\n')
+    usbman.save_state('/dev/fake')
+
+
+@pytest.mark.parametrize(
+    ('reply', 'reason'),
+    [(b'E01\r\n', 'wrong password'), (b'81FFFFFF\r\n', 'instead of confirming the save'), (b'', 'did not answer')],
+)
+def test_save_state_wants_the_g_cusbi_wants(monkeypatch, reply, reason):
+    hub_answering(monkeypatch, reply)
+    with pytest.raises(RuntimeError, match=reason):
+        usbman.save_state('/dev/fake')
 
 
 @pytest.mark.parametrize(
@@ -141,6 +169,27 @@ def test_timeout_defaults_to_blocking_forever():
 
 
 @pytest.mark.parametrize(
+    'args', [['--token', 's3cret', '+1'], ['+1', '--token=s3cret'], ['serve', '--token', 's3cret']]
+)
+def test_split_transport_takes_the_token(args):
+    transport, argv = split_transport(args)
+    assert transport.token == 's3cret'
+    assert 's3cret' not in argv
+
+
+def test_there_is_no_token_unless_given():
+    transport, _ = split_transport(['+1'])
+    assert transport.token is None
+
+
+def test_an_empty_token_is_a_usage_error():
+    """`--token "$TOKEN"` with the variable unset: refused, rather than taken for no token."""
+    with pytest.raises(SystemExit) as refused:
+        split_transport(['--token', '', 'serve'])
+    assert refused.value.code == cli.EXIT_USAGE
+
+
+@pytest.mark.parametrize(
     ('text', 'endpoint'),
     [
         ('', ('127.0.0.1', 9877)),
@@ -181,7 +230,7 @@ def test_the_version_is_the_one_the_package_reports():
 def test_help_mentions_the_transport_options():
     """They are not in the parser, so only the epilog can tell the user they exist."""
     text = cli.build_parser().format_help()
-    for option in ('--device', '--connect', '--timeout', 'USBMAN_SERVER'):
+    for option in ('--device', '--connect', '--timeout', '--token', 'USBMAN_SERVER', 'USBMAN_TOKEN'):
         assert option in text
 
 

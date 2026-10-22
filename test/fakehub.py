@@ -23,12 +23,15 @@ class FakeHub:
     def __call__(self, device_path, *, send_str=None, **kwargs):
         with self.lock:
             self.commands.append(send_str)
+        # The real replies wherever they have been seen on the wire: `GP` answers the states as
+        # 8 hex characters, `WP` a bare 'G'. The `SP` reply is not recorded, so it gets the
+        # states behind a 'G', which keeps the stripping in `decode_result` exercised.
+        if send_str.startswith('GP'):
+            return f'{0x80 | self.state:02X}FFFFFF\r\n'.encode()
         if send_str.startswith('SP'):
             self.state = int(send_str[10:12], 16) & 0x7F
-        elif send_str.startswith('WP'):
+            return f'G{0x80 | self.state:02X}FFFFFF\r\n'.encode()
+        if send_str.startswith('WP'):
             self.saved = self.state
-        elif not send_str.startswith('GP'):
-            return b'EFF\r\n'
-        # `WP` answers with the 'G' prefix and `GP` without it; both are accepted, so use the
-        # prefixed form throughout to keep exercising the stripping.
-        return f'G{0x80 | self.state:02X}FFFFFF\r\n'.encode()
+            return b'G\r\n'
+        return b'EFF\r\n'

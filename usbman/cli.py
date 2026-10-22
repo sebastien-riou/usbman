@@ -43,6 +43,10 @@ LOG_LEVELS = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
 # raises NameError on every error path. Always `sys.exit`, never the bare builtin.
 EXIT_ERROR = -1
 EXIT_NO_COMMUNICATION = -2
+# What argparse exits with on a command line it cannot parse. usbman never uses it for anything
+# else, which is what lets a server tell a request it could not make sense of from one which
+# merely failed, and close the connection on the first kind only.
+EXIT_USAGE = 2
 
 # The options below are consumed before the hub command parser runs, by `split_transport` in
 # usbman/server.py, so they do not appear in the help argparse generates.
@@ -50,9 +54,11 @@ TRANSPORT_HELP = """transport options, which go before the command and must be s
   --device PATH        serial device of the hub, auto detected when not given
   --connect HOST:PORT  send the command to a usbman server instead of a local hub
   --timeout SECONDS    socket timeout, -1 (the default) blocks forever
+  --token TOKEN        shared secret: serve requires it, a client sends it
 
 The USBMAN_SERVER environment variable acts as --connect, so an existing script needs no
-change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to local."""
+change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to local.
+USBMAN_TOKEN acts as --token, and keeps the token out of the process list."""
 
 
 def is_channel_number(value: str) -> bool:
@@ -114,6 +120,11 @@ def main():
         argv = expand_shorthand(rest)
 
         target = transport.connect or os.environ.get('USBMAN_SERVER') or None
+        # The same token at both ends: a client sends it, a server requires it. The server also
+        # says where it came from, since USBMAN_TOKEN is easy to export for the clients and
+        # forget, and a server started from the same shell then takes it too.
+        token = transport.token or os.environ.get('USBMAN_TOKEN') or None
+        token_source = '--token' if transport.token else 'USBMAN_TOKEN'
         if target is not None:
             # `--log-level` is forwarded to the server as well, it is only peeked at here so
             # that the client own messages obey it too. Set up before anything can fail, so
@@ -122,12 +133,12 @@ def main():
             if transport.device is not None:
                 raise RuntimeError('--device cannot be used with --connect, the server owns the hub')
             # Forwarded unparsed, so the server stays the authority on what a command means.
-            sys.exit(request(target, argv, transport.timeout))
+            sys.exit(request(target, argv, transport.timeout, token))
 
         args = build_parser().parse_args(argv)
         if args.command == 'serve':
             configure_logging(args.log_level)
-            sys.exit(serve(args.endpoint or DEFAULT_ENDPOINT, transport.device, transport.timeout))
+            sys.exit(serve(args.endpoint or DEFAULT_ENDPOINT, transport.device, transport.timeout, token, token_source))
         # Deliberately no configure_logging here: it would make the one inside `run_parsed` a
         # no op and so silently kill `--log-level` for the plain command line.
         run_parsed(args, device_path=transport.device)
@@ -526,10 +537,10 @@ def run_parsed(args, *, device_path=None, local=True, setup_logging=configure_lo
         current_state = set_state(device_path, state)
         logging.debug(f'current_state = {current_state:#02x}')
 
-    # Last, so that the state saved is the one the command has just produced.
+    # Last, so that the state saved is the one the command has just produced. It is also the one
+    # printed below, the hub's answer to a save carrying no states.
     if args.command == 'save' or getattr(args, 'save', False):
-        current_state = save_state(device_path)
-        logging.debug(f'saved_state = {current_state:#02x}')
+        save_state(device_path)
 
     if 0 == current_state:
         print('All off')

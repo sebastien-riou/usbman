@@ -50,8 +50,9 @@ Add `dist/usbman` in your PATH.
 | `characterize` | work out a hub model's wiring |
 | `serve [HOST:PORT]` | serve the commands above on a socket |
 
-`usbman COMMAND --help` describes one command. `--device`, `--connect` and `--timeout` go
-before the command, since they say which hub to talk to rather than what to do to it.
+`usbman COMMAND --help` describes one command. `--device`, `--connect`, `--timeout` and
+`--token` go before the command, since they say which hub to talk to and how, rather than what
+to do to it.
 
 ### Select the device
 `--device` is optional: leave it out and `usbman` finds the hub on its own, so all the examples
@@ -315,10 +316,20 @@ export USBMAN_SERVER=127.0.0.1:9877
 usbman +1 +5
 USBMAN_SERVER= usbman +1 +5   # this one goes back to the local hub
 ````
-**There is no authentication.** The server binds the loopback interface by default, so only
-this machine can reach it; give it an address of its own only on a network you trust, since
-anyone who can reach the port can cut the power to whatever is plugged into the hub. To reach
-it from another machine, forward the port over ssh rather than exposing it:
+**There is no authentication unless you ask for it.** A server started with `--token` serves
+only the clients which give the same token:
+````
+usbman serve --token "$TOKEN"
+usbman --connect 127.0.0.1:9877 --token "$TOKEN" +1 +5
+````
+Make it long and random, `python3 -c 'import secrets; print(secrets.token_hex(16))'` for
+instance. `USBMAN_TOKEN` stands for `--token` at both ends, as `USBMAN_SERVER` does for
+`--connect`, so a script needs no change for a server with a token either.
+
+The server binds the loopback interface by default, so only this machine can reach it. Give it
+an address of its own only on a network you trust: without a token anyone who can reach the
+port can cut the power to whatever is plugged into the hub, and the token travels in clear. To
+reach it from another machine, forward the port over ssh rather than exposing it:
 ````
 ssh -L 9877:127.0.0.1:9877 the-machine-with-the-hub
 ````

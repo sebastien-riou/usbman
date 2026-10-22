@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+from usbman import cli
 from usbman.server import EXIT_PREFIX, execute_request
 
 DEVICE = '/dev/fake'
@@ -137,6 +138,15 @@ def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
     assert hub.commands[-1] == 'WPpass    \r'
 
 
+def test_save_prints_the_state_it_saved(hub, routing):
+    """The hub's answer to a save carries no states, so what is printed is what was saved."""
+    run(['switch', '--on', '1', '3'], routing)
+    lines, code = run(['save'], routing)
+    out, _ = streams(lines)
+    assert (code, out) == (0, 'On: 1 3 \n')
+    assert hub.saved == 0b101
+
+
 def test_errors_reach_the_client_on_stderr(hub, routing):
     """They are reported through logging, so capturing the stdout alone would lose them."""
     lines, code = run(['switch', '--on', '1', '--off', '1'], routing)
@@ -152,6 +162,13 @@ def test_argparse_errors_reach_the_client_too(hub, routing):
     out, err = streams(lines)
     assert code == 2
     assert 'invalid channel' in err
+
+
+def test_a_request_which_does_not_parse_exits_with_the_code_the_server_closes_on(hub, routing):
+    """The server knows a request it could not make sense of by this code alone."""
+    for argv in (['POST', '/', 'HTTP/1.1'], ['token', 'x'], ['switch', '--on', '8']):
+        _, code = run(argv, routing)
+        assert code == cli.EXIT_USAGE
 
 
 def test_help_is_served(hub, routing):

@@ -10,6 +10,8 @@ SERVER.md documents the wire protocol.
 
 import argparse
 import contextlib
+import hashlib
+import hmac
 import logging
 import shlex
 import socket
@@ -30,10 +32,25 @@ TAG_OUT = 'O'  # goes to the client stdout
 TAG_ERR = 'E'  # goes to the client stderr
 EXIT_PREFIX = 'EXIT '
 
+# First word of the line by which a connection gives the token, `token SECRET`. It is no hub
+# command: the server takes such a line before the command line parser could see it.
+TOKEN_KEYWORD = 'token'
+
 # One hub, so one request at a time. The lock spans the whole request and not a single command:
 # `--reset` is several commands with a sleep in between, and two clients interleaving there
 # would leave channels off. It is in process only, a local `usbman` run still interleaves.
 LOCK = threading.Lock()
+
+
+def nonempty_token(value: str) -> str:
+    """argparse type of `--token`.
+
+    An empty token is refused rather than taken for none: it is what `--token "$TOKEN"` gives
+    when the variable is unset, and a server would then accept anybody without a word.
+    """
+    if not value:
+        raise argparse.ArgumentTypeError('the token cannot be empty')
+    return value
 
 
 def split_transport(args):
@@ -48,7 +65,17 @@ def split_transport(args):
     parser.add_argument('--device', default=None)
     parser.add_argument('--connect', default=None)
     parser.add_argument('--timeout', type=float, default=-1)
+    parser.add_argument('--token', type=nonempty_token, default=None)
     return parser.parse_known_args(list(args))
+
+
+def token_digest(token: str) -> bytes:
+    """Return what a token is compared by.
+
+    Digests are all the same size, so comparing them with `hmac.compare_digest` takes a time
+    which tells nothing about the token, not even its length.
+    """
+    return hashlib.sha256(token.encode()).digest()
 
 
 def peek_log_level(argv, default='INFO'):
@@ -232,12 +259,19 @@ def execute_request(argv, device_path, emit, routing):
 
 
 class Handler(socketserver.StreamRequestHandler):
-    """One connection, one request per line, for as long as the client cares to stay."""
+    """One connection, one request per line, until the client leaves or a line is refused.
+
+    A line the server cannot accept is answered `EXIT 2` and ends the connection, and nothing
+    sent after it runs. Whatever sent it is not speaking the protocol, so the lines after it are
+    not to be trusted either: the body of an HTTP request is the case in point, since a web page
+    can fill one with commands while the request line before it never parses.
+    """
 
     def handle(self):
         timeout = self.server.request_timeout
         if timeout is not None and timeout >= 0:
             self.connection.settimeout(timeout)
+        self.authenticated = self.server.token_digest is None
         while True:
             try:
                 line = self.rfile.readline(MAX_REQUEST)
@@ -245,22 +279,61 @@ class Handler(socketserver.StreamRequestHandler):
                 return
             if not line:
                 return
-            if not line.endswith(b'\n'):
-                # The line was cut at MAX_REQUEST, so the stream is out of step: say so and go.
-                self.emit(f'{TAG_ERR} request longer than {MAX_REQUEST} bytes\n')
-                self.emit(f'{EXIT_PREFIX}2\n')
-                return
-            # `replace` so that a port scanner or a TLS hello becomes an argparse error rather
-            # than an exception.
-            text = line.decode('utf-8', errors='replace').rstrip('\r\n')
-            try:
-                argv = shlex.split(text)
-            except ValueError as e:
-                self.emit(f'{TAG_ERR} {e}\n')
-                self.emit(f'{EXIT_PREFIX}2\n')
-                continue
-            code = execute_request(argv, self.server.device_path, self.emit, self.server.routing)
+            code = self.run_line(line)
             self.emit(f'{EXIT_PREFIX}{code}\n')
+            if code == cli.EXIT_USAGE:
+                return
+
+    def run_line(self, line) -> int:
+        """Run one line, sending all of its answer but the `EXIT` line, and return its exit code."""
+        if not line.endswith(b'\n'):
+            # Cut at MAX_REQUEST, so the stream is out of step on top of anything else.
+            return self.refuse(f'request longer than {MAX_REQUEST} bytes')
+        # `replace` so that a port scanner or a TLS hello becomes a refused line rather than an
+        # exception.
+        text = line.decode('utf-8', errors='replace').rstrip('\r\n')
+        try:
+            argv = shlex.split(text)
+        except ValueError as e:
+            return self.refuse(f'{e}')
+        if argv[:1] == [TOKEN_KEYWORD]:
+            return self.authenticate(argv[1:])
+        if not self.authenticated:
+            return self.refuse(
+                f'this server requires a token: use --token or USBMAN_TOKEN, or send "{TOKEN_KEYWORD} TOKEN" first'
+            )
+        code = execute_request(argv, self.server.device_path, self.emit, self.server.routing)
+        if code == cli.EXIT_USAGE:
+            self.log_refusal('the request does not parse')  # argparse has told the client what is wrong
+        return code
+
+    def authenticate(self, words) -> int:
+        """Check the token a line gives, and return the exit code of that line."""
+        if self.server.token_digest is None:
+            # Not ignored: a client sending one believes the hub is protected, and must hear
+            # that it is not.
+            return self.refuse(
+                'this server takes no token: drop --token and USBMAN_TOKEN, or start the server with one'
+            )
+        if len(words) != 1 or not hmac.compare_digest(token_digest(words[0]), self.server.token_digest):
+            return self.refuse('wrong token')
+        self.authenticated = True
+        return 0
+
+    def refuse(self, reason) -> int:
+        """Say why a line is refused, and return the exit code which ends the connection."""
+        self.emit(f'{TAG_ERR} {reason}\n')
+        self.log_refusal(reason)
+        return cli.EXIT_USAGE
+
+    def log_refusal(self, reason):
+        """Note a refused line in the server log, at debug level only.
+
+        Any client can be refused as often as it likes, so at a level shown by default this would
+        let anybody fill the log. The reason holds nothing the client sent, the token least of all.
+        """
+        host, port = self.client_address[:2]
+        self.server.logger.debug(f'refused {host}:{port}: {reason}')
 
     def emit(self, text):
         """Write one framed line, tolerating a client which has gone away.
@@ -282,11 +355,12 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1):
+def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1, token=None, token_source='--token'):
     """Serve the hub commands on `endpoint` until interrupted.
 
-    argparse allows one command, so `serve` cannot carry a hub command and there is nothing
-    left to validate here.
+    With a `token`, a connection has every line refused until it has given it. `token_source`,
+    `--token` or `USBMAN_TOKEN`, is named in the line logged at startup. argparse allows one
+    command, so `serve` cannot carry a hub command and there is nothing left to validate.
     """
     if device_path is None:
         device_path = find_device_path()
@@ -302,9 +376,11 @@ def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1):
     server.device_path = device_path
     server.routing = routing
     server.request_timeout = timeout
+    server.token_digest = None if token is None else token_digest(token)
     server.logger = logging.getLogger(__name__)
 
-    logging.info(f'Serving {device_path} on {host}:{port}, no authentication')
+    access = 'no authentication' if token is None else f'token required, from {token_source}'
+    logging.info(f'Serving {device_path} on {host}:{port}, {access}')
     routing.install()
     try:
         server.serve_forever()
@@ -317,28 +393,47 @@ def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1):
     return 0
 
 
-def request(target, argv, timeout=-1):
-    """Send one hub command to a usbman server, relay its output, and return its exit code."""
+def relay_answer(replies):
+    """Relay one answer of the server to stdout and stderr, and return its exit code.
+
+    `None` when the connection closes before the answer is over.
+    """
+    for reply in replies:
+        reply = reply.rstrip('\n')
+        if reply.startswith(EXIT_PREFIX):
+            return int(reply[len(EXIT_PREFIX) :])
+        if reply.startswith(f'{TAG_OUT} '):
+            sys.stdout.write(f'{reply[2:]}\n')
+        elif reply.startswith(f'{TAG_ERR} '):
+            sys.stderr.write(f'{reply[2:]}\n')
+        else:
+            logging.debug(f'ignored {reply!r}')
+    return None
+
+
+def request(target, argv, timeout=-1, token=None):
+    """Send one hub command to a usbman server, relay its output, and return its exit code.
+
+    A `token` goes first, and the command only once the server has accepted it, so that a
+    server which refuses the token never receives the command at all.
+    """
     host, port = parse_endpoint(target)
     line = ' '.join(shlex.quote(argument) for argument in argv)
-    logging.debug(f'{host}:{port} <- {line}')
+    logging.debug(f'{host}:{port} <- {line}')  # never the token line, which stays out of every log
+    lines = [line] if token is None else [f'{TOKEN_KEYWORD} {shlex.quote(token)}', line]
     try:
         with socket.socket(address_family(host), socket.SOCK_STREAM) as connection:
             if timeout is not None and timeout >= 0:
                 connection.settimeout(timeout)
             connection.connect((host, port))
-            connection.sendall(f'{line}\n'.encode())
             replies = connection.makefile('r', encoding='utf-8', errors='replace', newline='\n')
-            for reply in replies:
-                reply = reply.rstrip('\n')
-                if reply.startswith(EXIT_PREFIX):
-                    return int(reply[len(EXIT_PREFIX) :])
-                if reply.startswith(f'{TAG_OUT} '):
-                    sys.stdout.write(f'{reply[2:]}\n')
-                elif reply.startswith(f'{TAG_ERR} '):
-                    sys.stderr.write(f'{reply[2:]}\n')
-                else:
-                    logging.debug(f'ignored {reply!r}')
+            for text in lines:
+                connection.sendall(f'{text}\n'.encode())
+                code = relay_answer(replies)
+                if code != 0:
+                    break  # a refused token, or the answer to the command anyway
     except OSError as e:
         raise RuntimeError(f'cannot reach the usbman server at {host}:{port}: {e}') from e
-    raise RuntimeError(f'the usbman server at {host}:{port} closed the connection mid answer')
+    if code is None:
+        raise RuntimeError(f'the usbman server at {host}:{port} closed the connection mid answer')
+    return code

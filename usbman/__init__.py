@@ -52,18 +52,29 @@ ERROR_LEN = 3
 ERROR_REASONS = {b'E01': 'wrong password'}
 
 
-def decode_result(res: str) -> int:
-    logging.debug(f'res = {res}')
+def reply_body(res: bytes) -> bytes:
+    """Return a reply without its line ending, raising if it is empty or reports a failure."""
     body = res.strip()
     if 0 == len(body):
         raise RuntimeError('Device did not answer')
     if body.startswith(b'E') and len(body) == ERROR_LEN:
         reason = ERROR_REASONS.get(body, 'command refused')
         raise RuntimeError(f'Device returned "{res}" ({reason})')
-    if res.startswith(b'G'):
-        res = res[1:]
+    return body
+
+
+def decode_result(res: bytes) -> int:
+    """Return the channel states a reply carries, with or without a leading 'G'."""
+    logging.debug(f'res = {res}')
+    body = reply_body(res)
+    if body.startswith(b'G'):
+        body = body[1:]
     # The first byte is the channel bitmap; bit 7 is channel 8, which a 7 channel hub has not.
-    state = int(res[:2], 16) & 0x7F
+    try:
+        state = int(body[:2], 16) & 0x7F
+    except ValueError:
+        # A RuntimeError, which the command line reports, rather than a traceback.
+        raise RuntimeError(f'Device returned "{res}", which holds no channel states') from None
     logging.debug(f'state = {state}')
     return state
 
@@ -81,15 +92,18 @@ def set_state(device_path, state: int) -> int:
     return decode_result(state)
 
 
-def save_state(device_path) -> int:
+def save_state(device_path) -> None:
     """Store the current channel states as the ones the hub powers up with.
 
-    Return the states the hub reports back. This is what `cusbi /W` does.
+    The hub acknowledges with a bare `G\\r\\n` which carries no states. `cusbi /W` checks for a
+    wrong password, then for that `G`, and reads nothing else; so does this.
     """
     cmd = command('WP')
     logging.debug(f'save state command: {cmd}')
-    state = serial_command_response(device_path, send_str=cmd)
-    return decode_result(state)
+    res = serial_command_response(device_path, send_str=cmd)
+    logging.debug(f'res = {res}')
+    if not reply_body(res).startswith(b'G'):
+        raise RuntimeError(f'Device returned "{res}" instead of confirming the save')
 
 
 # Channels of a managed hub, channel `n` being the bit `n - 1` of the hub state.

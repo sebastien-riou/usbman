@@ -170,14 +170,19 @@ A reply is at most 20 bytes and ends with `\r\n`.
 | --- | --- | --- |
 | `XXXXXXXX\r\n` | 8 hex characters | the 4 payload bytes, i.e. the channel states |
 | `GXXXXXXXX\r\n` | `G` + 8 hex characters | the same, prefixed with `G` |
+| `G\r\n` | `G` alone | `WP` succeeded; there are no states in it |
 | `Enn\r\n` | 3 characters | failure, `nn` being an error code |
 
-Observed asymmetry: `GP` answers **without** the `G` prefix (a real reply is
-`b'FFFFFFFF\r\n'`), while `WP` answers **with** it — `DoSavePortState` treats a first byte other
-than `'G'` (`cmp $0x47`) as "Error to Save Port States to Flash!". Both **verified**, the first
-on the wire and the second in the binary. `usbman`'s `decode_result` has always stripped an
-optional leading `G`, which is why it copes with both; that lone branch was the only surviving
-hint of this whole command set before the binary was read.
+`GP` answers the states **without** a `G` (a real reply is `b'81FFFFFF\r\n'`), and `WP` answers
+a **bare** `G` with no states at all, `b'G\r\n'`. Both **verified** on the wire, the second on
+2026-10-22. The binary agrees: `DoSavePortState` checks for `E01`, then treats a first byte
+other than `'G'` (`cmp $0x47`) as "Error to Save Port States to Flash!", and reads nothing else.
+From the binary alone the `G` looked like a prefix of the states, and `usbman` crashed on the
+real reply until `save_state` was made to check it the way `cusbi` does.
+
+Which command answers `GXXXXXXXX`, if any, is not recorded. `decode_result` still strips a
+leading `G`, a branch which was the only surviving hint of this whole command set before the
+binary was read.
 
 ### Error codes
 
