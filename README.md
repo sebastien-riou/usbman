@@ -341,6 +341,34 @@ ssh -L 9877:127.0.0.1:9877 the-machine-with-the-hub
 ````
 [SERVER.md](SERVER.md) documents the wire protocol and the rest of the behaviour.
 
+## Security considerations
+A client which can reach the server, and give the token if there is one, can switch the
+channels: that is what the server is for. Beyond that, keep the following in mind.
+
+**A client can keep the others waiting.** The server serves four connections at once, and an open
+connection keeps its slot whether it sends anything or not, so four idle connections stall every
+other client. A client which keeps opening connections delays the others too. To limit it:
+- Set a token. A connection which has not given it within 10 seconds is dropped
+  (`--token-timeout`), so a client which does not know it cannot hold a slot for longer.
+- `usbman --timeout SECONDS serve` drops a client which stays silent that long, although one
+  sending a byte every few seconds stays connected.
+- Raise `--max-connections` if more clients than that legitimately stay connected.
+- Keep the port out of reach of clients you do not trust: the loopback default, ssh forwarding,
+  or a firewall. Nothing else stops a client which keeps opening connections.
+
+**`--allow-save` lets a client make its state permanent.** Any client may then store the state
+the hub powers up with, so a `switch --off all --save` survives power cycling the hub, and each
+save writes the hub's non-volatile memory, which only stands so many writes. Do not use
+`--allow-save` unless you trust every client which can reach the server. To put back a power up
+state you want, stop the server, switch the channels as they should be and run `usbman save`
+locally.
+
+**A client can see the machine's USB devices.** `list`, `path-of`, `id-path-of` and `channel-of`
+show any client the devices on the hub, with their serial numbers, nicknames and `/dev` paths, and
+`--version` shows the version of the server. `--log-level DEBUG` adds the path of the hub's serial
+device and the commands sent to it, whose password field is the hub's factory default and so gives
+nothing away. Serve only clients you would show all of this to.
+
 ## Protocol
 The hub speaks 9600 8N1 on the serial control interface. A command is a two character opcode,
 then, for the ones that write, an 8 character password field (`pass` followed by 4 spaces by

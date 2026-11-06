@@ -59,7 +59,9 @@ Details worth knowing:
   the log, and argparse writes its usage errors straight to stderr. A client which merged them
   would add log noise to `usbman +1 | grep`, and the point of `USBMAN_SERVER` is that a
   pipeline cannot tell the difference.
-- **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space.
+- **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space. The client
+  spells out control characters before printing, `\x1b` for an escape, so that a server, or a
+  device name it passes on, cannot drive the terminal. usbman writes none itself; a tab is kept.
 - **One connection carries as many requests as you like**, so a session with `nc` is a small
   REPL and a script can hold one connection open. It holds one of the server's
   [four slots](#four-connections-at-once) meanwhile.
@@ -69,7 +71,9 @@ Details worth knowing:
 - Anything which is not valid UTF-8 is replaced rather than raising, so a port scanner or a
   stray TLS handshake becomes a refused line instead of an exception.
 - Exit codes round trip signed: `-1` is a usbman error and `-2` means it could not talk to the
-  hub, which the shell reports as 255 and 254 exactly as it does locally.
+  hub, which the shell reports as 255 and 254 exactly as it does locally. The client takes -255
+  to 255 only, and reports anything else as an error: the status wraps past that, and `EXIT 256`
+  would make the shell see success.
 
 ## One request at a time
 
