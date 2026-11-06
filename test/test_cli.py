@@ -344,3 +344,8 @@ def test_max_connections_wants_at_least_one(value):
 )
 def test_token_timeout_has_a_default_which_minus_one_lifts(argv, limit):
     assert cli.build_parser().parse_args(argv).token_timeout == limit
+
+
+def test_a_server_refuses_to_save_unless_told_otherwise():
+    assert cli.build_parser().parse_args(['serve']).allow_save is False
+    assert cli.build_parser().parse_args(['serve', '--allow-save']).allow_save is True

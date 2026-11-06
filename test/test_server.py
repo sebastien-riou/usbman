@@ -88,6 +88,14 @@ def server(free_port):
 
 
 @pytest.fixture
+def saving_server(free_port):
+    """The same, letting clients save: the equivalence test covers `--save` too."""
+    process = start_server(free_port, '--allow-save')
+    yield free_port
+    stop_server(process)
+
+
+@pytest.fixture
 def token_server(free_port):
     """The same, started with a token."""
     process = start_server(free_port, '--token', TOKEN)
@@ -111,14 +119,22 @@ def token_server(free_port):
         ['--log-level', 'DEBUG', 'switch', '--on', '1'],
     ],
 )
-def test_remote_is_identical_to_local(server, arguments):
+def test_remote_is_identical_to_local(saving_server, arguments):
     local = run_locally(arguments)
-    remote = run_usbman(['--connect', f'127.0.0.1:{server}', *arguments])
+    remote = run_usbman(['--connect', f'127.0.0.1:{saving_server}', *arguments])
     assert remote.stdout == local.stdout
     assert remote.returncode == local.returncode
     # Every line the local command logs must reach the client too. The remote run may add a
     # line of its own about the connection, which is why this is not an equality.
     assert set(log_lines(local.stderr)) <= set(log_lines(remote.stderr))
+
+
+def test_a_server_refuses_to_save_unless_started_with_allow_save(server):
+    """A save outlives the server and every client, and wears the hub's non-volatile memory."""
+    answer = talk(server, 'switch --on 1 --save', 'save', '')
+    assert answer.count('changes the state the hub powers up with') == 2
+    assert answer.count('EXIT -1\n') == 2
+    assert answer.endswith('O All off\nEXIT 0\n')  # the switch did not happen either
 
 
 def test_usbman_server_environment_variable_is_equivalent_to_connect(server):

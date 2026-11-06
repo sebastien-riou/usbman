@@ -13,11 +13,11 @@ from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request, token_dig
 DEVICE = '/dev/fake'
 
 
-def run(argv, routing, device_path=DEVICE, max_toff=None):
+def run(argv, routing, device_path=DEVICE, max_toff=None, allow_save=True):
     """Return the framed lines and the exit code of one request."""
     lines = []
     with routing:
-        code = execute_request(argv, device_path, lines.append, routing, max_toff)
+        code = execute_request(argv, device_path, lines.append, routing, max_toff=max_toff, allow_save=allow_save)
     return lines, code
 
 
@@ -282,6 +282,19 @@ def test_a_toff_at_the_limit_is_granted(hub, routing):
     assert out == 'On: 1 \n'
 
 
+@pytest.mark.parametrize(
+    'argv', [['save'], ['switch', '--on', '1', '--save'], ['only', '1', '--save'], ['reset', '1', '--save']]
+)
+def test_a_server_refuses_to_save_unless_allowed(hub, routing, argv):
+    """Refused whole, before the hub hears anything: no half done request switching but not saving."""
+    lines, code = run(argv, routing, allow_save=False)
+    _, err = streams(lines)
+    assert code == cli.EXIT_ERROR
+    assert 'changes the state the hub powers up with' in err
+    assert '--allow-save' in err
+    assert hub.commands == []
+
+
 def serve_one_connection(routing, request_timeout=-1, token=None, token_timeout=None):
     """Run one `Handler` in a thread over a socket pair, and return the client end and the thread.
 
@@ -297,6 +310,7 @@ def serve_one_connection(routing, request_timeout=-1, token=None, token_timeout=
         token_digest=None if token is None else token_digest(token),
         token_timeout=token_timeout,
         max_toff=None,
+        allow_save=False,
         logger=logging.getLogger('usbman.server'),
     )
 

@@ -131,7 +131,8 @@ usbman switch --on 1 5 --save
 usbman save
 ````
 As an option it applies last, so `reset 1 --save` stores the state left by the reset, in which
-the reset channel is on.
+the reset channel is on. A `usbman` server refuses both unless it was started with
+`--allow-save`.
 
 ### Name a device instead of a channel
 Anywhere a channel number is accepted, you can instead name a device plugged into the hub and
@@ -317,10 +318,10 @@ export USBMAN_SERVER=127.0.0.1:9877
 usbman +1 +5
 USBMAN_SERVER= usbman +1 +5   # this one goes back to the local hub
 ````
-The one difference: a server grants a `reset` at most 60 seconds of `--toff`, since every other
-client waits for the hub meanwhile. `usbman serve --max-toff SECONDS` changes that, and `-1`
-lifts it. A server also serves four connections at once, and the others wait their turn
-(`--max-connections`).
+Two differences: a server refuses `save` and `--save` unless started with `--allow-save`, and
+grants a `reset` at most 60 seconds of `--toff`, since every other client waits for the hub
+meanwhile (`--max-toff`, `-1` lifts it). It also serves four connections at once, and the others
+wait their turn (`--max-connections`).
 **There is no authentication unless you ask for it.** A server started with `--token` serves
 only the clients which give the same token:
 ````

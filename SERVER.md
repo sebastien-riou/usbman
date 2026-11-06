@@ -152,6 +152,14 @@ write a file there, or ask someone standing at the hub to move a peripheral — 
 carrying any of them is refused. The server tells `run()` that the request did not originate
 locally and it declines.
 
+`save` and `--save` are refused too, unless the server was started with `--allow-save`. They
+change the state the hub powers up with, which outlives the server and every client: one
+`switch --off all --save` and power cycling the hub no longer brings anything back. Each also
+writes the hub's non-volatile memory, which only stands so many writes, whether or not the
+state changed. The hub cannot report what it has saved, so the server cannot skip a save which
+changes nothing. A request carrying `--save` is refused whole: `switch --on 1 --save` switches
+nothing either.
+
 Resolving a device is *not* local: a client naming a device by path or serial number is answered
 from the server's USB tree and, failing that, the server's snapshot. That is the right way
 round, since the devices and the hub are both on the server's machine. So

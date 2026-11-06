@@ -241,12 +241,12 @@ class Routing:
             self.level_filter.clear_level()
 
 
-def execute_request(argv, device_path, emit, routing, max_toff=None):
+def execute_request(argv, device_path, emit, routing, *, max_toff=None, allow_save=True):
     """Run one hub command, pass its output to `emit` line by line, and return its exit code.
 
     `emit` is called with the hub lock held, so it must not block: the server hands it a list to
     collect into, and sends the answer once the lock is released. `max_toff` is the longest
-    `reset --toff` granted, None for no limit.
+    `reset --toff` granted, None for no limit, and `allow_save` false refuses `save` and `--save`.
     """
     with LOCK, routing.capture(emit):
         try:
@@ -255,6 +255,7 @@ def execute_request(argv, device_path, emit, routing, max_toff=None):
                 device_path=device_path,
                 local=False,
                 max_toff=max_toff,
+                allow_save=allow_save,
                 setup_logging=routing.level_filter.set_level,
             )
         except SystemExit as e:  # argparse and every error path of the command line
@@ -343,7 +344,15 @@ class Handler(socketserver.StreamRequestHandler):
                 f'this server requires a token: use --token or USBMAN_TOKEN, or send "{TOKEN_KEYWORD} TOKEN" first'
             )
         answer = []
-        code = execute_request(argv, self.server.device_path, answer.append, self.server.routing, self.server.max_toff)
+        server = self.server
+        code = execute_request(
+            argv,
+            server.device_path,
+            answer.append,
+            server.routing,
+            max_toff=server.max_toff,
+            allow_save=server.allow_save,
+        )
         self.emit(''.join(answer))  # after the lock: a client which does not read holds up only itself
         if code == cli.EXIT_USAGE:
             self.log_refusal('the request does not parse')  # argparse has told the client what is wrong
@@ -430,7 +439,9 @@ def serve(
     timeout=-1,
     token=None,
     token_source='--token',
+    *,
     max_toff=cli.DEFAULT_MAX_TOFF,
+    allow_save=False,
     max_connections=cli.DEFAULT_MAX_CONNECTIONS,
     token_timeout=cli.DEFAULT_TOKEN_TIMEOUT,
 ):
@@ -439,9 +450,9 @@ def serve(
     With a `token`, a connection has every line refused until it has given it. `token_source`,
     `--token` or `USBMAN_TOKEN`, is named in the line logged at startup, and a connection which
     has not given it within `token_timeout` seconds is dropped. A `reset` asking for a `--toff`
-    longer than `max_toff` is refused. Either is unlimited when None. At most `max_connections`
-    are served at once. argparse allows one command, so `serve` cannot carry a hub command and
-    there is nothing left to validate.
+    longer than `max_toff` is refused. Either is unlimited when None. `save` and `--save` are
+    refused unless `allow_save`. At most `max_connections` are served at once. argparse allows
+    one command, so `serve` cannot carry a hub command and there is nothing left to validate.
     """
     if device_path is None:
         device_path = find_device_path()
@@ -459,6 +470,7 @@ def serve(
     server.request_timeout = timeout
     server.token_digest = None if token is None else token_digest(token)
     server.max_toff = max_toff
+    server.allow_save = allow_save
     server.token_timeout = token_timeout
     server.slots = threading.BoundedSemaphore(max_connections)
     server.logger = logging.getLogger(__name__)

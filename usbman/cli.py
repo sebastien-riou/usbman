@@ -195,6 +195,7 @@ def main():
                     token,
                     token_source,
                     max_toff=args.max_toff,
+                    allow_save=args.allow_save,
                     max_connections=args.max_connections,
                     token_timeout=args.token_timeout,
                 )
@@ -343,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=seconds_limit,
         help=f'longest reset --toff a client may ask for, -1 for no limit (default {DEFAULT_MAX_TOFF:g})',
     )
+    serve.add_argument('--allow-save', action='store_true', help='let clients change the state the hub powers up with')
     serve.add_argument(
         '--max-connections',
         default=DEFAULT_MAX_CONNECTIONS,
@@ -486,7 +488,7 @@ def print_characterization(sockets) -> None:
     print('Record the table and what it settles in NOTES.md, then commit it.')
 
 
-def run(argv=None, *, device_path=None, local=True, max_toff=None, setup_logging=configure_logging):
+def run(argv=None, *, device_path=None, local=True, max_toff=None, allow_save=True, setup_logging=configure_logging):
     """Parse a command line and run it. The server calls this with a client's arguments.
 
     The shorthand is expanded here as well as in `main`, so that `+1 -3` works when typed
@@ -495,10 +497,17 @@ def run(argv=None, *, device_path=None, local=True, max_toff=None, setup_logging
     """
     argv = expand_shorthand(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
-    return run_parsed(args, device_path=device_path, local=local, max_toff=max_toff, setup_logging=setup_logging)
+    return run_parsed(
+        args,
+        device_path=device_path,
+        local=local,
+        max_toff=max_toff,
+        allow_save=allow_save,
+        setup_logging=setup_logging,
+    )
 
 
-def run_parsed(args, *, device_path=None, local=True, max_toff=None, setup_logging=configure_logging):
+def run_parsed(args, *, device_path=None, local=True, max_toff=None, allow_save=True, setup_logging=configure_logging):
     """Run one already parsed command.
 
     `local` is false for a request which arrived over a socket: the commands which act on this
@@ -506,6 +515,10 @@ def run_parsed(args, *, device_path=None, local=True, max_toff=None, setup_loggi
 
     `max_toff` is the longest `reset --toff` allowed, None for no limit. A server sets it: a
     pulse keeps its channels off and every other client waiting, and nobody can cut it short.
+
+    `allow_save` false refuses `save` and `--save`. A server sets it unless told otherwise: the
+    state the hub powers up with outlives every client, and each save writes the hub's
+    non-volatile memory, which only stands so many writes.
 
     `device_path` comes from the caller, never from the command line: locally from the
     `--device` transport option, in a server from the device it resolved at startup. It is
@@ -517,6 +530,12 @@ def run_parsed(args, *, device_path=None, local=True, max_toff=None, setup_loggi
 
     if args.command in LOCAL_ONLY and not local:
         logging.error(f'{args.command} acts on the machine the hub is attached to, it cannot be asked for from here')
+        sys.exit(EXIT_ERROR)
+    if not allow_save and (args.command == 'save' or getattr(args, 'save', False)):
+        what = 'save' if args.command == 'save' else '--save'
+        logging.error(
+            f'{what} changes the state the hub powers up with, which this server allows only with --allow-save'
+        )
         sys.exit(EXIT_ERROR)
     if args.command == 'reset' and max_toff is not None and args.toff > max_toff:
         logging.error(f'--toff {args.toff:g} is longer than this server allows, {max_toff:g} seconds at most')
