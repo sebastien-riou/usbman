@@ -40,7 +40,7 @@ DEFAULT_MAX_TOFF = 60.0
 # The hub runs one request at a time anyway, so the others lose nothing by waiting their turn.
 DEFAULT_MAX_CONNECTIONS = 4
 
-# How long a connection to a server with a token has to give it, unless `serve --token-timeout`
+# How long a connection to a server with a token has to prove it, unless `serve --token-timeout`
 # says otherwise. Without it, a client which does not know the token could hold every slot.
 DEFAULT_TOKEN_TIMEOUT = 10.0
 
@@ -63,7 +63,7 @@ TRANSPORT_HELP = """transport options, which go before the command and must be s
   --device PATH        serial device of the hub, auto detected when not given
   --connect HOST:PORT  send the command to a usbman server instead of a local hub
   --timeout SECONDS    socket timeout, -1 (the default) blocks forever
-  --token TOKEN        shared secret: serve requires it, a client sends it
+  --token TOKEN        shared secret: serve requires it, a client proves it knows it
 
 The USBMAN_SERVER environment variable acts as --connect, so an existing script needs no
 change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to local.
@@ -160,7 +160,7 @@ def main():
         argv = expand_shorthand(rest)
 
         target = transport.connect or os.environ.get('USBMAN_SERVER') or None
-        # The same token at both ends: a client sends it, a server requires it. The server also
+        # The same token at both ends: a client proves it, a server requires it. The server also
         # says where it came from, since USBMAN_TOKEN is easy to export for the clients and
         # forget, and a server started from the same shell then takes it too.
         token = transport.token or os.environ.get('USBMAN_TOKEN') or None
@@ -348,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_TOKEN_TIMEOUT,
         metavar='SECONDS',
         type=seconds_limit,
-        help=f'time a connection has to give the --token, -1 for no limit (default {DEFAULT_TOKEN_TIMEOUT:g})',
+        help=f'time a connection has to prove the --token, -1 for no limit (default {DEFAULT_TOKEN_TIMEOUT:g})',
     )
 
     return parser

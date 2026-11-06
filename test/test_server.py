@@ -5,6 +5,8 @@ These tests run both out of process and compare them byte for byte, which is the
 that can prove the two have not drifted.
 """
 
+import hashlib
+import hmac
 import os
 import re
 import socket
@@ -65,7 +67,12 @@ def start_server(port, *options, env=None):
         if process.poll() is not None:
             pytest.fail(f'the server died: {process.communicate()[1]}')
         try:
-            with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+            with socket.create_connection(('127.0.0.1', port), timeout=0.2) as probe:
+                # Accepting a connection is not serving: the port listens before the server has
+                # logged its startup line. It closes this one once a handler has run, after that.
+                probe.shutdown(socket.SHUT_WR)
+                probe.settimeout(10)
+                probe.recv(1)
                 return process
         except OSError:
             time.sleep(0.05)
@@ -203,6 +210,31 @@ def talk(port, *requests, timeout=10):
             received += chunk
 
 
+def proof(nonce, token=TOKEN):
+    """The proof of `token` for `nonce`, worked out as SERVER.md says rather than by usbman."""
+    return hmac.new(token.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+
+
+def talk_after_challenge(port, answer, *requests, timeout=10):
+    """Ask for a challenge the way a person with nc would, then send `answer(nonce)` and `requests`.
+
+    Return everything the server sent after its answer to the challenge.
+    """
+    with socket.create_connection(('127.0.0.1', port), timeout=timeout) as connection:
+        replies = connection.makefile('rb')
+        connection.sendall(b'challenge\n')
+        nonce = replies.readline().decode().removeprefix('O ').rstrip('\n')
+        assert replies.readline() == b'EXIT 0\n'
+        connection.sendall(''.join(f'{line}\n' for line in (answer(nonce), *requests)).encode())
+        connection.shutdown(socket.SHUT_WR)
+        return replies.read().decode()
+
+
+def talk_with_token(port, *requests):
+    """`talk`, on a connection which has proved the token first."""
+    return talk_after_challenge(port, lambda nonce: f'proof {proof(nonce)}', *requests)
+
+
 def test_the_protocol_is_usable_by_hand(server):
     answer = talk(server, 'switch --on 1 3')
     assert 'O On: 1 3 \n' in answer
@@ -315,14 +347,14 @@ def test_connections_beyond_the_limit_wait_their_turn(free_port):
     assert answer == [b'O All off\n', b'EXIT 0\n']
 
 
-def test_a_server_with_a_token_drops_a_connection_which_does_not_give_it(free_port):
+def test_a_server_with_a_token_drops_a_connection_which_does_not_prove_it(free_port):
     process = start_server(free_port, '--token', TOKEN, '--token-timeout', '0.3')
     try:
         with socket.create_connection(('127.0.0.1', free_port), timeout=5) as silent:
             started = time.monotonic()
             assert silent.recv(4096) == b''
             assert time.monotonic() - started < 2
-        assert talk(free_port, f'token {TOKEN}', '').endswith('O All off\nEXIT 0\n')
+        assert talk_with_token(free_port, '').endswith('O All off\nEXIT 0\n')
     finally:
         stop_server(process)
 
@@ -343,45 +375,96 @@ def test_a_disconnect_at_debug_level_does_not_flood_the_log(free_port):
 
 
 def test_a_server_with_a_token_refuses_whatever_comes_before_it(token_server):
-    """Even the right token is too late once a line has been refused: the connection is gone."""
+    """Even a challenge is too late once a line has been refused: the connection is gone."""
     for first in ('+1', ''):
-        answer = talk(token_server, first, f'token {TOKEN}', '+1')
+        answer = talk(token_server, first, 'challenge', '+1')
         assert 'requires a token' in answer
         assert answer.endswith('EXIT 2\n')
         assert answer.count('EXIT') == 1
-    assert 'O All off\n' in talk(token_server, f'token {TOKEN}', '')
+    assert 'O All off\n' in talk_with_token(token_server, '')
 
 
 @pytest.mark.parametrize(
-    'line', ['token nope', 'token', f'token {TOKEN} {TOKEN}', f'token {TOKEN[:-1]}', f'token {TOKEN}0']
+    'answer',
+    [
+        lambda nonce: 'proof nope',
+        lambda nonce: 'proof',
+        lambda nonce: f'proof {proof(nonce)} {proof(nonce)}',
+        lambda nonce: f'proof {proof(nonce)[:-1]}',
+        lambda nonce: f'proof {proof(nonce)}0',
+        lambda nonce: f'proof {proof(nonce).upper()}',
+        lambda nonce: f'proof {proof(nonce, "nope")}',
+        lambda nonce: f'proof {proof("0" * 32)}',
+    ],
+    ids=['garbage', 'nothing', 'twice', 'short', 'long', 'upper case', 'wrong token', 'another nonce'],
 )
-def test_a_wrong_token_ends_the_connection(token_server, line):
-    answer = talk(token_server, line, '+1')
-    assert 'wrong token' in answer
+def test_a_wrong_proof_ends_the_connection(token_server, answer):
+    reply = talk_after_challenge(token_server, answer, '+1')
+    assert 'wrong token' in reply
+    assert reply.endswith('EXIT 2\n')
+    assert 'O All off\n' in talk_with_token(token_server, '')
+
+
+def test_the_token_itself_opens_nothing(token_server):
+    """Only a proof does, so that a client never has a reason to send the token."""
+    answer = talk(token_server, f'token {TOKEN}', '+1')
+    assert 'requires a token' in answer
     assert answer.endswith('EXIT 2\n')
-    assert 'O All off\n' in talk(token_server, f'token {TOKEN}', '')
+    assert answer.count('EXIT') == 1
 
 
-def test_the_token_opens_the_connection_to_every_request_after_it(token_server):
-    answer = talk(token_server, f'token {TOKEN}', '+1', '+3')
+def test_a_proof_needs_a_challenge_first(token_server):
+    answer = talk(token_server, f'proof {proof("0" * 32)}', '+1')
+    assert 'send "challenge" first' in answer
+    assert answer.endswith('EXIT 2\n')
+    assert answer.count('EXIT') == 1
+
+
+def test_every_challenge_is_new_and_answered_by_one_proof_only(token_server):
+    """A proof seen once is worthless."""
+    with socket.create_connection(('127.0.0.1', token_server), timeout=10) as connection:
+        replies = connection.makefile('rb')
+
+        def challenge():
+            connection.sendall(b'challenge\n')
+            nonce = replies.readline().decode().removeprefix('O ').rstrip('\n')
+            assert replies.readline() == b'EXIT 0\n'
+            return nonce
+
+        first = challenge()
+        second = challenge()
+        connection.sendall(f'proof {proof(second)}\n'.encode())
+        accepted = replies.readline()
+        connection.sendall(f'proof {proof(second)}\n'.encode())  # the very same proof again
+        replayed = [replies.readline(), replies.readline()]
+    assert len(first) == 32
+    assert first != second
+    assert accepted == b'EXIT 0\n'
+    assert replayed[0].startswith(b'E send "challenge" first')
+    assert replayed[1] == b'EXIT 2\n'
+
+
+def test_the_proof_opens_the_connection_to_every_request_after_it(token_server):
+    answer = talk_with_token(token_server, '+1', '+3')
     assert answer == 'EXIT 0\nO On: 1 \nEXIT 0\nO On: 1 3 \nEXIT 0\n'
 
 
-def test_an_http_request_cannot_give_the_token_in_time(token_server):
-    answer = talk(token_server, 'POST / HTTP/1.1\r', f'token {TOKEN}\r', '+1\r')
+def test_an_http_request_cannot_prove_the_token_in_time(token_server):
+    answer = talk(token_server, 'POST / HTTP/1.1\r', 'challenge\r', '+1\r')
     assert 'requires a token' in answer
     assert answer.count('EXIT') == 1
 
 
-def test_a_token_sent_to_a_server_without_one_is_refused(server):
+@pytest.mark.parametrize('line', ['challenge', f'proof {"0" * 64}'])
+def test_a_token_offered_to_a_server_without_one_is_refused(server, line):
     """The client believes the hub is protected, and must hear that it is not."""
-    answer = talk(server, 'token whatever', '+1')
+    answer = talk(server, line, '+1')
     assert 'takes no token' in answer
     assert answer.endswith('EXIT 2\n')
     assert 'O All off\n' in talk(server, '')
 
 
-def test_the_client_sends_the_token(token_server):
+def test_the_client_proves_the_token(token_server):
     result = run_usbman(['--connect', f'127.0.0.1:{token_server}', '--token', TOKEN, '+1'])
     assert (result.returncode, result.stdout) == (0, 'On: 1 \n')
 
@@ -400,24 +483,85 @@ def test_usbman_token_acts_as_token(token_server, option, variable):
     assert (result.returncode, result.stdout) == (0, 'On: 1 \n')
 
 
-def test_the_command_is_not_sent_until_the_token_is_accepted():
-    """A server refusing the token must never see the command, not even unread in its buffer."""
+def test_the_command_is_not_sent_until_the_proof_is_accepted():
+    """A server refusing the proof must never see the command, not even unread in its buffer."""
     received = []
 
-    def refuse_the_token(listener):
+    def refuse_the_proof(listener):
         connection, _ = listener.accept()
         with connection, connection.makefile('rb') as lines:
+            received.append(lines.readline())
+            connection.sendall(b'O 0123abcd\nEXIT 0\n')
             received.append(lines.readline())
             connection.sendall(b'E wrong token\nEXIT 2\n')
             received.append(lines.readline())  # empty once the client has gone, unless it sent more
 
     with socket.create_server(('127.0.0.1', 0)) as listener:
-        thread = threading.Thread(target=refuse_the_token, args=(listener,))
+        thread = threading.Thread(target=refuse_the_proof, args=(listener,))
         thread.start()
         code = request(f'127.0.0.1:{listener.getsockname()[1]}', ['switch', '--on', '1'], token='nope')
         thread.join(timeout=10)
     assert code == 2
-    assert received == [b'token nope\n', b'']
+    assert received == [b'challenge\n', f'proof {proof("0123abcd", "nope")}\n'.encode(), b'']
+
+
+def test_an_impostor_on_the_port_never_sees_the_token(free_port):
+    """Whatever listens in the server's place, while it is down say, gets a proof it cannot reuse."""
+    received = []
+
+    def impersonate(listener):
+        connection, _ = listener.accept()
+        with connection, connection.makefile('rb') as lines:
+            for answer in (b'O 0123abcd\nEXIT 0\n', b'EXIT 0\n', b'O All off\nEXIT 0\n'):
+                received.append(lines.readline())
+                connection.sendall(answer)
+
+    with socket.create_server(('127.0.0.1', free_port)) as listener:
+        thread = threading.Thread(target=impersonate, args=(listener,))
+        thread.start()
+        result = run_usbman(['--connect', f'127.0.0.1:{free_port}', '--token', TOKEN, '+1'])
+        thread.join(timeout=10)
+    assert result.returncode == 0
+    assert received[0] == b'challenge\n'
+    assert received[2] == b'switch --on 1\n'
+    assert TOKEN.encode() not in b''.join(received)
+
+
+@pytest.mark.parametrize('answer', [b'EXIT 0\n', b'O \nEXIT 0\n', b'O 01\nO 23\nEXIT 0\n'])
+def test_a_challenge_answered_without_a_nonce_is_reported_rather_than_raised(free_port, answer):
+    def answer_badly(listener):
+        connection, _ = listener.accept()
+        with connection, connection.makefile('rb') as lines:
+            lines.readline()
+            connection.sendall(answer)
+            lines.readline()  # until the client has gone
+
+    with socket.create_server(('127.0.0.1', free_port)) as listener:
+        thread = threading.Thread(target=answer_badly, args=(listener,))
+        thread.start()
+        result = run_usbman(['--connect', f'127.0.0.1:{free_port}', '--token', TOKEN, '+1'])
+        thread.join(timeout=10)
+    assert result.returncode == 255
+    assert 'answered "challenge" with no challenge' in result.stderr
+    assert 'Traceback' not in result.stderr
+
+
+def test_a_hostile_server_can_neither_crash_the_client_nor_drive_its_terminal(free_port):
+    def answer_badly(listener):
+        connection, _ = listener.accept()
+        with connection, connection.makefile('rb') as lines:
+            lines.readline()
+            connection.sendall(b'O \x1b[2Jscreen cleared\nEXIT nope\n')
+
+    with socket.create_server(('127.0.0.1', free_port)) as listener:
+        thread = threading.Thread(target=answer_badly, args=(listener,))
+        thread.start()
+        result = run_usbman(['--connect', f'127.0.0.1:{free_port}', '+1'])
+        thread.join(timeout=10)
+    assert result.stdout == '\\x1b[2Jscreen cleared\n'
+    assert result.returncode == 255
+    assert "'EXIT nope', which holds no exit code" in result.stderr
+    assert 'Traceback' not in result.stderr
 
 
 def test_an_empty_usbman_token_means_none(server):
@@ -433,7 +577,7 @@ def test_a_refused_client_says_why(token_server, option, reason):
     assert result.returncode == 2
     assert reason in result.stderr
     assert 'Traceback' not in result.stderr
-    assert 'O All off\n' in talk(token_server, f'token {TOKEN}', '')
+    assert 'O All off\n' in talk_with_token(token_server, '')
 
 
 def test_an_empty_token_is_refused_rather_than_serving_without_one(free_port):
@@ -465,8 +609,8 @@ def test_the_server_says_whether_it_requires_a_token_and_where_it_came_from(free
 def test_refusals_are_logged_at_debug_level(free_port):
     process = start_server(free_port, '--token', TOKEN, '--log-level', 'DEBUG')
     talk(free_port, '+1')
-    talk(free_port, 'token nope')
-    talk(free_port, f'token {TOKEN}', 'POST / HTTP/1.1')
+    talk_after_challenge(free_port, lambda nonce: 'proof nope')
+    talk_with_token(free_port, 'POST / HTTP/1.1')
     _, err = stop_server(process)
     refusals = [line for line in err.splitlines() if 'DEBUG:\trefused 127.0.0.1:' in line]
     assert len(refusals) == 3
@@ -478,7 +622,7 @@ def test_refusals_are_logged_at_debug_level(free_port):
 def test_refusals_are_not_logged_at_the_default_level(free_port):
     """Anybody can be refused as often as they like, which must not be a way to fill the log."""
     process = start_server(free_port, '--token', TOKEN)
-    talk(free_port, 'token nope')
+    talk_after_challenge(free_port, lambda nonce: 'proof nope')
     _, err = stop_server(process)
     assert 'refused' not in err
 

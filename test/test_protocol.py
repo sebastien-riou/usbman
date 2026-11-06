@@ -1,5 +1,7 @@
 """`execute_request`: running a hub command and framing what it produced."""
 
+import hashlib
+import hmac
 import logging
 import socket
 import threading
@@ -8,7 +10,7 @@ import types
 
 import pytest
 from usbman import cli
-from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request, token_digest
+from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request, relay_answer, token_key, token_proof
 
 DEVICE = '/dev/fake'
 
@@ -319,7 +321,7 @@ def serve_one_connection(routing, request_timeout=-1, token=None, token_timeout=
         device_path=DEVICE,
         routing=routing,
         request_timeout=request_timeout,
-        token_digest=None if token is None else token_digest(token),
+        token_key=None if token is None else token_key(token),
         token_timeout=token_timeout,
         max_toff=None,
         allow_save=False,
@@ -364,7 +366,7 @@ def test_a_client_which_stops_reading_is_dropped_at_its_first_timed_out_write(hu
     assert dropped
 
 
-def test_a_connection_which_does_not_give_the_token_in_time_is_dropped(hub, routing):
+def test_a_connection_which_does_not_prove_the_token_in_time_is_dropped(hub, routing):
     """Or a client without the token could hold one of the server's slots just by saying nothing."""
     with routing:
         client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
@@ -377,8 +379,8 @@ def test_a_connection_which_does_not_give_the_token_in_time_is_dropped(hub, rout
     assert closed
 
 
-def test_sending_the_token_a_byte_at_a_time_does_not_stretch_the_deadline(hub, routing):
-    """Each byte would restart a socket timeout; the deadline is for the line as a whole."""
+def test_sending_a_byte_at_a_time_does_not_stretch_the_deadline(hub, routing):
+    """Each byte would restart a socket timeout; the deadline is for the exchange as a whole."""
     with routing:
         client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
         started = time.monotonic()
@@ -395,11 +397,39 @@ def test_sending_the_token_a_byte_at_a_time_does_not_stretch_the_deadline(hub, r
     assert time.monotonic() - started < 2
 
 
-def test_once_the_token_is_given_a_connection_may_stay_idle(hub, routing):
+def test_the_proof_is_the_hmac_of_the_nonce_keyed_with_the_token():
+    """What SERVER.md documents, and what a person at the socket computes with openssl."""
+    expected = hmac.new(b'secret', b'0123abcd', hashlib.sha256).hexdigest()
+    assert token_proof(token_key('secret'), '0123abcd') == expected
+
+
+def test_a_key_proves_any_number_of_nonces():
+    """The server keys once, at start, then proves every nonce from that one key."""
+    key = token_key('secret')
+    assert token_proof(key, 'a') == token_proof(token_key('secret'), 'a')
+    assert token_proof(key, 'b') == token_proof(token_key('secret'), 'b')
+    assert token_proof(key, 'a') != token_proof(key, 'b')
+
+
+def test_a_connection_which_asks_for_a_challenge_but_never_proves_is_dropped(hub, routing):
+    """The deadline is for the whole exchange, not just the first line."""
+    with routing:
+        client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
+        client.sendall(b'challenge\n')
+        thread.join(timeout=5)
+        dropped = not thread.is_alive()
+        client.close()
+    assert dropped
+
+
+def test_once_the_token_is_proved_a_connection_may_stay_idle(hub, routing):
     with routing:
         client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
         replies = client.makefile('r')
-        client.sendall(b'token secret\n')
+        client.sendall(b'challenge\n')
+        nonce = replies.readline().removeprefix('O ').rstrip('\n')
+        replies.readline()
+        client.sendall(f'proof {token_proof(token_key("secret"), nonce)}\n'.encode())
         given = replies.readline()
         time.sleep(0.6)  # twice the deadline
         client.sendall(b'\n')
@@ -410,6 +440,34 @@ def test_once_the_token_is_given_a_connection_may_stay_idle(hub, routing):
     assert answer == ['O All off\n', 'EXIT 0\n']
 
 
-@pytest.mark.parametrize('code', [0, 2, -1, -2])
+@pytest.mark.parametrize('code', [0, 2, -1, -2, 255, -255])
 def test_exit_codes_round_trip_as_signed_integers(code):
-    assert int(f'{EXIT_PREFIX}{code}'[len(EXIT_PREFIX) :]) == code
+    assert relay_answer([f'{EXIT_PREFIX}{code}\n']) == code
+
+
+@pytest.mark.parametrize(
+    'line', ['EXIT x', 'EXIT ', 'EXIT 1.0', 'EXIT  1', 'EXIT +1', 'EXIT ²', 'EXIT 256', 'EXIT -256']
+)
+def test_a_malformed_exit_line_is_reported_rather_than_raised(line):
+    """256 is the one to fear: `sys.exit(256)` exits 0, so a failure would pass for a success."""
+    with pytest.raises(RuntimeError, match='holds no exit code'):
+        relay_answer([f'{line}\n'])
+
+
+@pytest.mark.parametrize(
+    ('text', 'shown'),
+    [
+        ('\x1b]0;owned\x07', r'\x1b]0;owned\x07'),  # retitle the terminal window
+        ('\x1b[2J', r'\x1b[2J'),  # clear the screen
+        ('\x9b31m', r'\x9b31m'),  # the one byte form of an escape sequence
+        ('\r', r'\x0d'),  # write over the start of the line
+        ('\x7f', r'\x7f'),
+        ('a\tb', 'a\tb'),  # the log format has a tab
+        ('Pico ✓ café', 'Pico ✓ café'),  # not a control character
+    ],
+)
+def test_control_characters_from_the_server_never_reach_the_terminal(capsys, text, shown):
+    relay_answer([f'O {text}\n', f'E {text}\n', 'EXIT 0\n'])
+    out, err = capsys.readouterr()
+    assert out == f'{shown}\n'
+    assert err == f'{shown}\n'

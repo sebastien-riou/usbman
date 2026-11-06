@@ -227,3 +227,39 @@ def test_a_client_may_list(sysfs, capsys):
     """Read only, and answered from the server's own tree and file, so it is not local only."""
     usbman.cli.run(['list'], device_path='/dev/fake', local=False, setup_logging=lambda level: None)
     assert 'live' in capsys.readouterr().out
+
+
+# What a device may put in its product name and serial number: a window title, a screen clear,
+# and the one byte form of the escape which starts a control sequence.
+HOSTILE = '\x1b]0;owned\x07\x1b[2J\x9b2J'
+HOSTILE_SPELLED = '\\x1b]0;owned\\x07\\x1b[2J\\x9b2J'
+
+
+def test_device_strings_cannot_drive_the_terminal(sysfs, capsys):
+    """A device chooses its own strings, so a local listing spells their control characters out."""
+    node = os.path.join(sysfs.usb, '5-1.2.2')  # the Pico, on channel 5
+    write(os.path.join(node, 'product'), f'Pico{HOSTILE}\n')
+    write(os.path.join(node, 'serial'), f'{PICO}{HOSTILE}\n')
+    out = listing(capsys)
+    assert not any(character in out for character in '\x1b\x07\x9b')
+    assert f'{PICO}{HOSTILE_SPELLED}' in out
+    assert f'Pico{HOSTILE_SPELLED}' in out
+
+
+def test_a_device_is_named_by_the_serial_number_the_listing_shows(sysfs):
+    write(os.path.join(sysfs.usb, '5-1.2.2', 'serial'), f'{PICO}{HOSTILE}\n')
+    assert usbman.channel_of(f'{PICO}{HOSTILE_SPELLED}') == 5
+
+
+def test_a_snapshot_holds_device_strings_spelled_out(sysfs):
+    node = os.path.join(sysfs.usb, '5-1.2.2')
+    write(os.path.join(node, 'product'), f'Pico{HOSTILE}\n')
+    write(os.path.join(node, 'serial'), f'{PICO}{HOSTILE}\n')
+    entries, _ = usbman.capture_snapshot()
+    assert (5, f'{PICO}{HOSTILE_SPELLED}', f'Pico{HOSTILE_SPELLED}') in entries
+
+
+def test_a_device_string_which_is_not_utf8_is_listed_rather_than_raised(sysfs, capsys):
+    with open(os.path.join(sysfs.usb, '5-1.2.2', 'product'), 'wb') as f:
+        f.write(b'Pico\xff\xfe\n')
+    assert 'Pico��' in listing(capsys)

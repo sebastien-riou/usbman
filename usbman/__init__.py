@@ -2,6 +2,7 @@ import importlib.metadata
 import logging
 import os
 import time
+import unicodedata
 from typing import NamedTuple
 
 from serial.tools import list_ports
@@ -87,7 +88,7 @@ def get_state(device_path) -> int:
 def set_state(device_path, state: int) -> int:
     payload = bytes([0x80 | state]) + b'\xff' * (PAYLOAD_LEN - 1)
     cmd = command('SP', payload)
-    logging.debug(f'set state command: {cmd}')
+    logging.debug(f'set state command: {cmd!r}')
     state = serial_command_response(device_path, send_str=cmd)
     return decode_result(state)
 
@@ -99,7 +100,7 @@ def save_state(device_path) -> None:
     wrong password, then for that `G`, and reads nothing else; so does this.
     """
     cmd = command('WP')
-    logging.debug(f'save state command: {cmd}')
+    logging.debug(f'save state command: {cmd!r}')
     res = serial_command_response(device_path, send_str=cmd)
     logging.debug(f'res = {res}')
     if not reply_body(res).startswith(b'G'):
@@ -127,6 +128,19 @@ def is_ascii_digits(text: str) -> bool:
 def is_channel_number(value: str) -> bool:
     """Tell whether a token is meant as a channel number rather than a device reference."""
     return is_ascii_digits(value) and len(value) <= CHANNEL_NUMBER_DIGITS
+
+
+def escape_controls(text: str, keep: str = '') -> str:
+    r"""Return `text` with its control characters spelled out, `\x1b` for an escape.
+
+    Text which ends up on a terminal must not carry them: an escape sequence can retitle the
+    window, rewrite what is already on the screen, or set the clipboard. The characters in
+    `keep` are left alone.
+    """
+    return ''.join(
+        f'\\x{ord(character):02x}' if unicodedata.category(character) == 'Cc' and character not in keep else character
+        for character in text
+    )
 
 
 # How long to allow for a device to vanish once its power is cut. Unlike enumeration, which is
@@ -501,22 +515,14 @@ def usb_nodes_by_serial(serial: str) -> list[str]:
     found = []
     for name in sorted(os.listdir(USB_SYSFS)):
         node = os.path.join(USB_SYSFS, name)
-        try:
-            with open(os.path.join(node, 'serial')) as f:
-                if f.read().strip() == serial:
-                    found.append(os.path.realpath(node))
-        except OSError:
-            continue  # no serial attribute, or it went away mid scan
+        if read_attribute(node, 'serial') == serial:
+            found.append(os.path.realpath(node))
     return found
 
 
 def describe_usb_node(node: str) -> str:
     """Describe a USB device the way the ambiguity errors need to."""
-    try:
-        with open(os.path.join(node, 'product')) as f:
-            product = f.read().strip()
-    except OSError:
-        product = 'unknown product'
+    product = read_attribute(node, 'product') or 'unknown product'
     return f'{os.path.basename(node)} ({usb_id_str(read_usb_id(node))}, {product})'
 
 
@@ -771,12 +777,18 @@ def channel_ports_table(sockets) -> dict:
 
 
 def read_attribute(node: str, name: str) -> str | None:
-    """Return a sysfs attribute of a USB device, or None when it has none."""
+    """Return a string attribute of a USB device, `serial` or `product`, or None when it has none.
+
+    These come from the device itself, which may put anything in them, so its control characters
+    are spelled out: they end up on a terminal, in the listing or in an error, and in the
+    snapshot. A serial number is then matched in the form the listing shows, which is the form a
+    user can type. Bytes which are not UTF-8 are replaced rather than raised.
+    """
     try:
-        with open(os.path.join(node, name)) as f:
-            return f.read().strip()
+        with open(os.path.join(node, name), encoding='utf-8', errors='replace') as f:
+            return escape_controls(f.read().strip())
     except OSError:
-        return None
+        return None  # no such attribute, or the device went away mid scan
 
 
 def tty_paths_on_channel(channel: int) -> list:

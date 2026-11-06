@@ -323,7 +323,7 @@ grants a `reset` at most 60 seconds of `--toff`, since every other client waits 
 meanwhile (`--max-toff`, `-1` lifts it). It also serves four connections at once, and the others
 wait their turn (`--max-connections`).
 **There is no authentication unless you ask for it.** A server started with `--token` serves
-only the clients which give the same token:
+only the clients which prove they know the same token, which they do without sending it:
 ````
 usbman serve --token "$TOKEN"
 usbman --connect 127.0.0.1:9877 --token "$TOKEN" +1 +5
@@ -334,21 +334,31 @@ instance. `USBMAN_TOKEN` stands for `--token` at both ends, as `USBMAN_SERVER` d
 
 The server binds the loopback interface by default, so only this machine can reach it. Give it
 an address of its own only on a network you trust: without a token anyone who can reach the
-port can cut the power to whatever is plugged into the hub, and the token travels in clear. To
-reach it from another machine, forward the port over ssh rather than exposing it:
+port can cut the power to whatever is plugged into the hub, and with one everything but the
+token travels in clear. To reach it from another machine, forward the port over ssh rather than
+exposing it:
 ````
 ssh -L 9877:127.0.0.1:9877 the-machine-with-the-hub
 ````
 [SERVER.md](SERVER.md) documents the wire protocol and the rest of the behaviour.
 
 ## Security considerations
-A client which can reach the server, and give the token if there is one, can switch the
+A client which can reach the server, and prove the token if there is one, can switch the
 channels: that is what the server is for. Beyond that, keep the following in mind.
+
+**Over a network you do not trust, use ssh.** `usbman` encrypts nothing, and nothing proves to a
+client that it reached the real server. The token itself never travels, but the requests and
+their answers do, in clear. Whoever can watch the traffic reads them, and whoever can take the
+server's place can answer what it likes, so that a client believes a channel was switched when
+it was not. Over the open internet, or any network you do not trust, keep the server on the
+loopback interface and forward the port over ssh, as above. The same goes for a machine shared
+with people you do not trust: any of them can listen on the port while the server is down, so
+keep it running, under systemd for instance (see [SERVER.md](SERVER.md)).
 
 **A client can keep the others waiting.** The server serves four connections at once, and an open
 connection keeps its slot whether it sends anything or not, so four idle connections stall every
 other client. A client which keeps opening connections delays the others too. To limit it:
-- Set a token. A connection which has not given it within 10 seconds is dropped
+- Set a token. A connection which has not proved it within 10 seconds is dropped
   (`--token-timeout`), so a client which does not know it cannot hold a slot for longer.
 - `usbman --timeout SECONDS serve` drops a client which stays silent that long, although one
   sending a byte every few seconds stays connected.

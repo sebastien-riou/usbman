@@ -13,13 +13,14 @@ import contextlib
 import hashlib
 import hmac
 import logging
+import secrets
 import shlex
 import socket
 import socketserver
 import sys
 import threading
 
-from usbman import cli, find_device_path, is_ascii_digits
+from usbman import cli, escape_controls, find_device_path, is_ascii_digits
 
 DEFAULT_ENDPOINT = '127.0.0.1:9877'
 DEFAULT_HOST = '127.0.0.1'
@@ -32,9 +33,12 @@ TAG_OUT = 'O'  # goes to the client stdout
 TAG_ERR = 'E'  # goes to the client stderr
 EXIT_PREFIX = 'EXIT '
 
-# First word of the line by which a connection gives the token, `token SECRET`. It is no hub
-# command: the server takes such a line before the command line parser could see it.
-TOKEN_KEYWORD = 'token'
+# First words of the two lines by which a connection proves it knows the token without sending
+# it: `challenge`, answered with a nonce, then `proof HMAC`. They are no hub commands: the server
+# takes them before the command line parser could see them.
+CHALLENGE_KEYWORD = 'challenge'
+PROOF_KEYWORD = 'proof'
+NONCE_BYTES = 16
 
 # One hub, so one request at a time. The lock spans the whole request and not a single command:
 # `--reset` is several commands with a sleep in between, and two clients interleaving there
@@ -70,13 +74,25 @@ def split_transport(args):
     return parser.parse_known_args(list(args))
 
 
-def token_digest(token: str) -> bytes:
-    """Return what a token is compared by.
+def token_key(token: str):
+    """Return HMAC-SHA256 keyed with `token`, ready for `token_proof`.
 
-    Digests are all the same size, so comparing them with `hmac.compare_digest` takes a time
+    Keyed once, so that the server, which does it at start, then checks every proof in a time
     which tells nothing about the token, not even its length.
     """
-    return hashlib.sha256(token.encode()).digest()
+    return hmac.new(token.encode(), digestmod=hashlib.sha256)
+
+
+def token_proof(key, nonce: str) -> str:
+    """Return the proof of knowing the token behind `key`, for `nonce`: the HMAC of it, in hex.
+
+    `openssl dgst -sha256 -hmac TOKEN` gives the same, for a person typing at the socket. The
+    proof does not give the token away, and the server never gives the same nonce twice, so a
+    proof seen once is worthless. It does let a guess at the token be checked, at leisure.
+    """
+    mac = key.copy()
+    mac.update(nonce.encode())
+    return mac.hexdigest()
 
 
 def peek_log_level(argv, default='INFO'):
@@ -293,13 +309,14 @@ class Handler(socketserver.StreamRequestHandler):
         timeout = self.server.request_timeout
         if timeout is not None and timeout >= 0:
             self.connection.settimeout(timeout)
-        self.authenticated = self.server.token_digest is None
+        self.authenticated = self.server.token_key is None
+        self.nonce = None  # the challenge the next proof answers, if one was asked for
         self.gone = False
         self.expired = False
         token_timer = None
         if not self.authenticated and self.server.token_timeout is not None:
-            # A deadline for the token line as a whole: a socket timeout restarts at every byte,
-            # so a client sending one now and then would hold its slot for good.
+            # A deadline for the whole exchange, up to the proof: a socket timeout restarts at
+            # every byte, so a client sending one now and then would hold its slot for good.
             token_timer = threading.Timer(self.server.token_timeout, self.expire)
             token_timer.daemon = True
             token_timer.start()
@@ -320,7 +337,7 @@ class Handler(socketserver.StreamRequestHandler):
                 token_timer.cancel()
 
     def expire(self):
-        """Drop a connection which has not given the token in time, so that it frees its slot.
+        """Drop a connection which has not proved the token in time, so that it frees its slot.
 
         Called from a timer thread, so it does not write to the client, which might not be
         reading. Shutting the socket down ends the read `handle` is blocked in instead.
@@ -328,7 +345,7 @@ class Handler(socketserver.StreamRequestHandler):
         if self.authenticated:
             return
         self.expired = True
-        self.log_refusal(f'no token within {self.server.token_timeout:g} seconds')
+        self.log_refusal(f'no proof of the token within {self.server.token_timeout:g} seconds')
         try:
             self.connection.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -346,11 +363,14 @@ class Handler(socketserver.StreamRequestHandler):
             argv = shlex.split(text)
         except ValueError as e:
             return self.refuse(f'{e}')
-        if argv[:1] == [TOKEN_KEYWORD]:
+        if argv[:1] == [CHALLENGE_KEYWORD]:
+            return self.challenge(argv[1:])
+        if argv[:1] == [PROOF_KEYWORD]:
             return self.authenticate(argv[1:])
         if not self.authenticated:
             return self.refuse(
-                f'this server requires a token: use --token or USBMAN_TOKEN, or send "{TOKEN_KEYWORD} TOKEN" first'
+                f'this server requires a token: use --token or USBMAN_TOKEN, '
+                f'or prove it with "{CHALLENGE_KEYWORD}" and "{PROOF_KEYWORD}"'
             )
         answer = []
         server = self.server
@@ -367,18 +387,36 @@ class Handler(socketserver.StreamRequestHandler):
             self.log_refusal('the request does not parse')  # argparse has told the client what is wrong
         return code
 
+    def challenge(self, words) -> int:
+        """Answer a fresh nonce for the client to prove the token with, and return the exit code."""
+        if self.server.token_key is None:
+            return self.refuse_token()
+        if words:
+            return self.refuse(f'"{CHALLENGE_KEYWORD}" takes nothing after it')
+        self.nonce = secrets.token_hex(NONCE_BYTES)
+        self.emit(f'{TAG_OUT} {self.nonce}\n')
+        return 0
+
     def authenticate(self, words) -> int:
-        """Check the token a line gives, and return the exit code of that line."""
-        if self.server.token_digest is None:
-            # Not ignored: a client sending one believes the hub is protected, and must hear
-            # that it is not.
-            return self.refuse(
-                'this server takes no token: drop --token and USBMAN_TOKEN, or start the server with one'
-            )
-        if len(words) != 1 or not hmac.compare_digest(token_digest(words[0]), self.server.token_digest):
+        """Check the proof of the token a line gives, and return the exit code of that line."""
+        if self.server.token_key is None:
+            return self.refuse_token()
+        nonce, self.nonce = self.nonce, None  # good for one proof, right or wrong
+        if nonce is None:
+            return self.refuse(f'send "{CHALLENGE_KEYWORD}" first, and prove the token with its answer')
+        expected = token_proof(self.server.token_key, nonce).encode()
+        if len(words) != 1 or not hmac.compare_digest(words[0].encode(), expected):
             return self.refuse('wrong token')
         self.authenticated = True
         return 0
+
+    def refuse_token(self) -> int:
+        """Refuse to authenticate a client of a server which takes no token.
+
+        Not ignored: a client which proves a token believes the hub is protected, and must hear
+        that it is not.
+        """
+        return self.refuse('this server takes no token: drop --token and USBMAN_TOKEN, or start the server with one')
 
     def refuse(self, reason) -> int:
         """Say why a line is refused, and return the exit code which ends the connection."""
@@ -456,9 +494,9 @@ def serve(
 ):
     """Serve the hub commands on `endpoint` until interrupted.
 
-    With a `token`, a connection has every line refused until it has given it. `token_source`,
+    With a `token`, a connection has every line refused until it has proved it. `token_source`,
     `--token` or `USBMAN_TOKEN`, is named in the line logged at startup, and a connection which
-    has not given it within `token_timeout` seconds is dropped. A `reset` asking for a `--toff`
+    has not proved it within `token_timeout` seconds is dropped. A `reset` asking for a `--toff`
     longer than `max_toff` is refused. Either is unlimited when None. `save` and `--save` are
     refused unless `allow_save`. At most `max_connections` are served at once. argparse allows
     one command, so `serve` cannot carry a hub command and there is nothing left to validate.
@@ -477,7 +515,7 @@ def serve(
     server.device_path = device_path
     server.routing = routing
     server.request_timeout = timeout
-    server.token_digest = None if token is None else token_digest(token)
+    server.token_key = None if token is None else token_key(token)
     server.max_toff = max_toff
     server.allow_save = allow_save
     server.token_timeout = token_timeout
@@ -498,45 +536,81 @@ def serve(
     return 0
 
 
-def relay_answer(replies):
-    """Relay one answer of the server to stdout and stderr, and return its exit code.
+def exit_code(reply):
+    """Return the exit code of the `EXIT` line which ends an answer.
 
-    `None` when the connection closes before the answer is over.
+    At most 255 either way, every one of which keeps its meaning through `sys.exit`: past that
+    the status wraps, and `EXIT 256` would turn a failure into a success.
+    """
+    text = reply[len(EXIT_PREFIX) :]
+    digits = text[1:] if text.startswith('-') else text
+    if not is_ascii_digits(digits) or int(digits) > 255:
+        raise RuntimeError(f'the usbman server ended its answer with {reply!r}, which holds no exit code')
+    return int(text)
+
+
+def relay_answer(replies, out=None):
+    """Relay one answer of the server, and return its exit code.
+
+    Its stdout lines go to `out` when there is one, to stdout otherwise, and its stderr lines to
+    stderr. `None` when the connection closes before the answer is over.
     """
     for reply in replies:
         reply = reply.rstrip('\n')
         if reply.startswith(EXIT_PREFIX):
-            return int(reply[len(EXIT_PREFIX) :])
+            return exit_code(reply)
+        # Spelled out whatever the server is: a hostile one could send anything. usbman's own log
+        # format has a tab, which is kept.
+        text = escape_controls(reply[2:], keep='\t')
         if reply.startswith(f'{TAG_OUT} '):
-            sys.stdout.write(f'{reply[2:]}\n')
+            if out is None:
+                sys.stdout.write(f'{text}\n')
+            else:
+                out(text)
         elif reply.startswith(f'{TAG_ERR} '):
-            sys.stderr.write(f'{reply[2:]}\n')
+            sys.stderr.write(f'{text}\n')
         else:
             logging.debug(f'ignored {reply!r}')
     return None
 
 
+def prove_token(connection, replies, token):
+    """Prove to the server that this client knows `token`, and return the exit code of the proof.
+
+    The token itself never goes over the connection, so whatever listens on the port in the
+    server's place learns nothing it could pass for it. Anything but 0 means the server has not
+    accepted the proof, and the command must not follow.
+    """
+    connection.sendall(f'{CHALLENGE_KEYWORD}\n'.encode())
+    nonces = []
+    code = relay_answer(replies, out=nonces.append)
+    if code != 0:
+        return code
+    if len(nonces) != 1 or not nonces[0]:
+        raise RuntimeError(f'the usbman server answered "{CHALLENGE_KEYWORD}" with no challenge')
+    connection.sendall(f'{PROOF_KEYWORD} {token_proof(token_key(token), nonces[0])}\n'.encode())
+    return relay_answer(replies)
+
+
 def request(target, argv, timeout=-1, token=None):
     """Send one hub command to a usbman server, relay its output, and return its exit code.
 
-    A `token` goes first, and the command only once the server has accepted it, so that a
-    server which refuses the token never receives the command at all.
+    A `token` is proved first, and the command sent only once the server has accepted the proof,
+    so that a server which does not never receives the command at all.
     """
     host, port = parse_endpoint(target)
     line = ' '.join(shlex.quote(argument) for argument in argv)
-    logging.debug(f'{host}:{port} <- {line}')  # never the token line, which stays out of every log
-    lines = [line] if token is None else [f'{TOKEN_KEYWORD} {shlex.quote(token)}', line]
+    logging.debug(f'{host}:{port} <- {line}')  # never the challenge and the proof
     try:
         with socket.socket(address_family(host), socket.SOCK_STREAM) as connection:
             if timeout is not None and timeout >= 0:
                 connection.settimeout(timeout)
             connection.connect((host, port))
             replies = connection.makefile('r', encoding='utf-8', errors='replace', newline='\n')
-            for text in lines:
-                connection.sendall(f'{text}\n'.encode())
+            code = 0 if token is None else prove_token(connection, replies, token)
+            if code == 0:  # anything else is a refused proof, or no answer at all
+                connection.sendall(f'{line}\n'.encode())
                 code = relay_answer(replies)
-                if code != 0:
-                    break  # a refused token, or the answer to the command anyway
     except OSError as e:
         raise RuntimeError(f'cannot reach the usbman server at {host}:{port}: {e}') from e
     if code is None:

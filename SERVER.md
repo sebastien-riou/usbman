@@ -22,7 +22,7 @@ Line oriented, and meant to be usable by hand.
 
 ```
 request    one line, split the way a shell would; an empty line reports the state
-           "token <token>" gives the token, to a server started with --token
+           "challenge" and "proof <hmac>" prove the token, to a server started with --token
 response   "O <text>"   a line for the client stdout
            "E <text>"   a line for the client stderr
            "EXIT <n>"   end of the answer, the exit code as a signed integer
@@ -49,12 +49,13 @@ Details worth knowing:
 
 - **A refused line ends the connection.** `EXIT 2` means the server could not make sense of the
   line: it does not parse, it is longer than 4096 bytes, or the token is wrong or has not been
-  given yet. The server closes the connection after answering it, and nothing sent after it
+  proved yet. The server closes the connection after answering it, and nothing sent after it
   runs, which is why the session above ends at `+8`. Whatever sent such a line is not speaking
   this protocol, so the lines which follow are not to be trusted either; [Security](#security)
   has the case which makes this matter. A request which parses and then fails, `EXIT -1` say,
   leaves the connection open.
-- **Every line is answered**, the token line included, which gets `EXIT 0` when it is right.
+- **Every line is answered**, `challenge` and `proof` included, which get `EXIT 0` when they
+  are accepted.
 - **The two streams stay apart.** The commands print their result but report every error through
   the log, and argparse writes its usage errors straight to stderr. A client which merged them
   would add log noise to `usbman +1 | grep`, and the point of `USBMAN_SERVER` is that a
@@ -98,7 +99,7 @@ costs a client nothing, since the hub runs one request at a time anyway. Past a 
 the system holds off further connection attempts, which then take a few seconds to get through.
 
 An open connection keeps its slot, idle or not, so four `nc` sessions left open stall every
-other client. With a token, a connection which has not given it in time is dropped, so somebody
+other client. With a token, a connection which has not proved it in time is dropped, so somebody
 who does not know it cannot hold the slots (see [Security](#security)). Nothing stops a client
 which keeps opening connections from delaying the others, though: the limit keeps the server
 healthy under a flood, not the hub available.
@@ -134,7 +135,7 @@ its channels back on.
 | --- | --- | --- |
 | `--connect` | connecting, and each read of the answer | `-1`, wait indefinitely |
 | `--serve` | waiting for the next request, and sending an answer; a client which runs out of either is dropped | `-1`, never drop a client |
-| `serve --token-timeout` | giving the token, the line as a whole; a client which takes longer is dropped | `10`, `-1` for none |
+| `serve --token-timeout` | proving the token, from connecting to the proof; a client which takes longer is dropped | `10`, `-1` for none |
 
 Neither cuts a request short once it runs. The one request which can run long is a pulse, and
 [its limit](#a-pulse-has-a-limit) applies before it starts.
@@ -177,9 +178,10 @@ which for a managed hub means cutting the power to whatever is plugged in. The d
 `127.0.0.1`, so nothing off the machine can reach it, but every user and every program on it
 can.
 
-**With `--token`, a connection must give the token before anything else**, as the line
-`token <token>`. Any other line before it is refused, and so ends the connection. `--connect`
-sends the token for you:
+**With `--token`, a connection must prove it knows the token before anything else**, without
+sending it. It sends `challenge`, the server answers a random nonce, and the connection sends
+`proof` followed by the HMAC-SHA256 of that nonce keyed with the token, in hex. Any other line
+before the proof is refused, and so ends the connection. `--connect` does all of it for you:
 
 ```
 TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
@@ -187,15 +189,36 @@ usbman serve --token "$TOKEN"
 usbman --connect 127.0.0.1:9877 --token "$TOKEN" +1
 ```
 
-- **Use a long random token**, as above: nothing limits how fast a client may guess.
+By hand, `openssl` works out the proof, in a second terminal:
+
+```
+$ nc 127.0.0.1 9877
+challenge
+O c922636eb1aba92d194c934c4e7c8cf9
+EXIT 0
+proof 8b65c1231d5d5a68f7af5244d8cc4c2b6c1766d2630dd037d877334a63e280fb
+EXIT 0
++1
+O On: 1 
+EXIT 0
+```
+
+```
+$ printf %s c922636eb1aba92d194c934c4e7c8cf9 | openssl dgst -sha256 -hmac "$TOKEN"
+SHA2-256(stdin)= 8b65c1231d5d5a68f7af5244d8cc4c2b6c1766d2630dd037d877334a63e280fb
+```
+
+- **Use a long random token**, as above: nothing limits how fast a client may guess, and whoever
+  sees a challenge and its proof can check guesses against them at leisure.
 - **`USBMAN_TOKEN` stands for `--token`** at both ends. It keeps the token off the command line,
   where every user of the machine can read it with `ps`, and it lets a script written for
   `USBMAN_SERVER` reach a server with a token with no change.
-- **A connection has 10 seconds to give the token**, `--token-timeout` to change it and `-1`
+- **A connection has 10 seconds to prove the token**, `--token-timeout` to change it and `-1`
   for no limit. Otherwise somebody who does not know the token could hold every
   [slot](#four-connections-at-once) by connecting and saying nothing. The deadline is for the
-  token line as a whole, so sending it a byte at a time does not stretch it, and it is over once
-  the token is given: the connection may then stay idle as long as it likes. A connection which
+  whole exchange, from connecting to the proof, so sending a byte at a time does not stretch it,
+  and it is over once the proof is accepted: the connection may then stay idle as long as it
+  likes. A connection which
   misses it is closed without a word, the server never writing to a client which may not read.
 - **The server says when it starts whether it requires a token, and where it got it**, without
   ever showing the token itself:
@@ -214,11 +237,15 @@ usbman --connect 127.0.0.1:9877 --token "$TOKEN" +1
 - **An empty `--token` is refused.** It is what `--token "$TOKEN"` gives when the variable is
   unset, and the server would otherwise start open to anybody. An empty `USBMAN_TOKEN` means no
   token, the way an empty `USBMAN_SERVER` means no server.
-- **A server without a token refuses one.** A client sending a token believes the hub is
-  protected, and is told that it is not rather than left to believe it.
-- **The token travels in clear.** It keeps out whoever does not know it, not whoever can watch
-  the traffic. To use the server from elsewhere, forward the port over ssh rather than binding
-  a public address:
+- **A server without a token refuses `challenge` and `proof`.** A client proving a token
+  believes the hub is protected, and is told that it is not rather than left to believe it.
+- **The token never travels; everything else does, in clear.** Every challenge is new, so a
+  proof seen once is worthless, and a program listening on the port in the server's place,
+  while the server is down say, learns nothing it can pass for the token. Nothing proves to the
+  client that it reached the real server, though, so such a program sees the requests and can
+  answer what it likes, and one which can reach the real server as well can hand it the
+  client's proof. To use the server from elsewhere, forward the port over ssh rather than
+  binding a public address:
 
   ```
   ssh -L 9877:127.0.0.1:9877 the-machine-with-the-hub

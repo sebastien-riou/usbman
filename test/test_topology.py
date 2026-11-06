@@ -104,3 +104,13 @@ def test_the_committed_channel_table_is_well_formed():
         assert hub_usb_id in usbman.MANAGED_HUB_USB_IDS
         assert all(channel in usbman.CHANNELS for channel in ports)
         assert len(set(ports.values())) == len(ports), f'two channels claim one port on {hub_usb_id}'
+
+
+def test_an_ambiguity_error_spells_out_control_characters(sysfs):
+    """It names the devices by their product strings, which the devices choose."""
+    with open(os.path.join(sysfs.usb, '5-1.2', 'product'), 'w') as f:
+        f.write('HUB\x1b[2J\n')
+    with pytest.raises(RuntimeError, match='shared by 2 devices') as refused:
+        usbman.channel_of('000000000')
+    assert '\x1b' not in str(refused.value)
+    assert 'HUB\\x1b[2J' in str(refused.value)
