@@ -270,6 +270,39 @@ def test_max_toff_sets_the_limit(free_port):
     assert answer.endswith('O On: 1 \nEXIT 0\n')
 
 
+def test_connections_beyond_the_limit_wait_their_turn(free_port):
+    """Not accepted until a slot frees, rather than refused: the hub only serves one at a time anyway."""
+    process = start_server(free_port, '--max-connections', '2')
+    idle = [socket.create_connection(('127.0.0.1', free_port)) for _ in range(2)]
+    try:
+        with socket.create_connection(('127.0.0.1', free_port), timeout=10) as waiting:
+            waiting.sendall(b'\n')
+            waiting.settimeout(0.5)
+            with pytest.raises(TimeoutError):
+                waiting.recv(4096)
+            idle[0].close()
+            waiting.settimeout(10)
+            replies = waiting.makefile('rb')
+            answer = [replies.readline(), replies.readline()]
+    finally:
+        for connection in idle:
+            connection.close()
+        stop_server(process)
+    assert answer == [b'O All off\n', b'EXIT 0\n']
+
+
+def test_a_server_with_a_token_drops_a_connection_which_does_not_give_it(free_port):
+    process = start_server(free_port, '--token', TOKEN, '--token-timeout', '0.3')
+    try:
+        with socket.create_connection(('127.0.0.1', free_port), timeout=5) as silent:
+            started = time.monotonic()
+            assert silent.recv(4096) == b''
+            assert time.monotonic() - started < 2
+        assert talk(free_port, f'token {TOKEN}', '').endswith('O All off\nEXIT 0\n')
+    finally:
+        stop_server(process)
+
+
 def test_a_disconnect_at_debug_level_does_not_flood_the_log(free_port):
     """A failed write used to log through the very client it failed on, recursing without end."""
     process = start_server(free_port, '--log-level', 'DEBUG')

@@ -319,3 +319,28 @@ def test_a_pulse_too_long_to_wait_turns_its_channels_back_on(hub):
     with pytest.raises(RuntimeError, match='cannot stay off for 1e\\+300 seconds'):
         pulse(['reset', 'all', '--toff', '1e300'])
     assert hub.state == 0x7F
+
+
+@pytest.mark.parametrize(
+    ('argv', 'count'), [(['serve'], cli.DEFAULT_MAX_CONNECTIONS), (['serve', '--max-connections', '1'], 1)]
+)
+def test_max_connections_has_a_default(argv, count):
+    assert cli.build_parser().parse_args(argv).max_connections == count
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'x', '1.5'])
+def test_max_connections_wants_at_least_one(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.positive_count(value)
+
+
+@pytest.mark.parametrize(
+    ('argv', 'limit'),
+    [
+        (['serve'], cli.DEFAULT_TOKEN_TIMEOUT),
+        (['serve', '--token-timeout', '2.5'], 2.5),
+        (['serve', '--token-timeout', '-1'], None),
+    ],
+)
+def test_token_timeout_has_a_default_which_minus_one_lifts(argv, limit):
+    assert cli.build_parser().parse_args(argv).token_timeout == limit

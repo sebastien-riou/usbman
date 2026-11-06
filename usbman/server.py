@@ -285,17 +285,44 @@ class Handler(socketserver.StreamRequestHandler):
             self.connection.settimeout(timeout)
         self.authenticated = self.server.token_digest is None
         self.gone = False
-        while True:
-            try:
-                line = self.rfile.readline(MAX_REQUEST)
-            except OSError:
-                return
-            if not line:
-                return
-            code = self.run_line(line)
-            self.emit(f'{EXIT_PREFIX}{code}\n')
-            if self.gone or code == cli.EXIT_USAGE:
-                return
+        self.expired = False
+        token_timer = None
+        if not self.authenticated and self.server.token_timeout is not None:
+            # A deadline for the token line as a whole: a socket timeout restarts at every byte,
+            # so a client sending one now and then would hold its slot for good.
+            token_timer = threading.Timer(self.server.token_timeout, self.expire)
+            token_timer.daemon = True
+            token_timer.start()
+        try:
+            while True:
+                try:
+                    line = self.rfile.readline(MAX_REQUEST)
+                except OSError:
+                    return
+                if not line or self.expired:
+                    return
+                code = self.run_line(line)
+                self.emit(f'{EXIT_PREFIX}{code}\n')
+                if self.gone or code == cli.EXIT_USAGE:
+                    return
+        finally:
+            if token_timer is not None:
+                token_timer.cancel()
+
+    def expire(self):
+        """Drop a connection which has not given the token in time, so that it frees its slot.
+
+        Called from a timer thread, so it does not write to the client, which might not be
+        reading. Shutting the socket down ends the read `handle` is blocked in instead.
+        """
+        if self.authenticated:
+            return
+        self.expired = True
+        self.log_refusal(f'no token within {self.server.token_timeout:g} seconds')
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # gone already
 
     def run_line(self, line) -> int:
         """Run one line, sending all of its answer but the `EXIT` line, and return its exit code."""
@@ -368,10 +395,33 @@ class Handler(socketserver.StreamRequestHandler):
 
 
 class Server(socketserver.ThreadingTCPServer):
-    """Accept in threads, so that an idle connection never holds the hub."""
+    """Accept in threads, so that an idle connection never holds the hub, up to `slots` at once.
+
+    A connection beyond the limit is not accepted until one of the others closes. It waits in the
+    listen queue meanwhile, costing the server neither a thread nor a descriptor: a flood of idle
+    connections used to exhaust both, after which `accept` failed at every turn of the loop, at
+    100% CPU. Waiting rather than being refused costs a client nothing, as the hub runs one
+    request at a time anyway.
+    """
 
     allow_reuse_address = True
     daemon_threads = True
+
+    def get_request(self):
+        """Accept a connection, once a slot is free."""
+        self.slots.acquire()
+        try:
+            return super().get_request()
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def shutdown_request(self, request):
+        """Close a connection, freeing its slot. Called exactly once for each accepted."""
+        try:
+            super().shutdown_request(request)
+        finally:
+            self.slots.release()
 
 
 def serve(
@@ -381,13 +431,17 @@ def serve(
     token=None,
     token_source='--token',
     max_toff=cli.DEFAULT_MAX_TOFF,
+    max_connections=cli.DEFAULT_MAX_CONNECTIONS,
+    token_timeout=cli.DEFAULT_TOKEN_TIMEOUT,
 ):
     """Serve the hub commands on `endpoint` until interrupted.
 
     With a `token`, a connection has every line refused until it has given it. `token_source`,
-    `--token` or `USBMAN_TOKEN`, is named in the line logged at startup. A `reset` asking for a
-    `--toff` longer than `max_toff` is refused, unless it is None. argparse allows one command,
-    so `serve` cannot carry a hub command and there is nothing left to validate.
+    `--token` or `USBMAN_TOKEN`, is named in the line logged at startup, and a connection which
+    has not given it within `token_timeout` seconds is dropped. A `reset` asking for a `--toff`
+    longer than `max_toff` is refused. Either is unlimited when None. At most `max_connections`
+    are served at once. argparse allows one command, so `serve` cannot carry a hub command and
+    there is nothing left to validate.
     """
     if device_path is None:
         device_path = find_device_path()
@@ -405,6 +459,8 @@ def serve(
     server.request_timeout = timeout
     server.token_digest = None if token is None else token_digest(token)
     server.max_toff = max_toff
+    server.token_timeout = token_timeout
+    server.slots = threading.BoundedSemaphore(max_connections)
     server.logger = logging.getLogger(__name__)
 
     access = 'no authentication' if token is None else f'token required, from {token_source}'

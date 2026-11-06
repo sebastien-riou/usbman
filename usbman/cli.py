@@ -35,6 +35,14 @@ ALL_CHANNELS = 'all'
 # A pulse holds the hub, and its channels off, for all of that time, and nothing can cut it short.
 DEFAULT_MAX_TOFF = 60.0
 
+# How many connections a server serves at once unless `serve --max-connections` says otherwise.
+# The hub runs one request at a time anyway, so the others lose nothing by waiting their turn.
+DEFAULT_MAX_CONNECTIONS = 4
+
+# How long a connection to a server with a token has to give it, unless `serve --token-timeout`
+# says otherwise. Without it, a client which does not know the token could hold every slot.
+DEFAULT_TOKEN_TIMEOUT = 10.0
+
 # A run of up to this many digits is a channel number; a longer one is a USB serial number.
 # The boundary is what lets an all digit serial such as '000000000' be named directly, while
 # keeping the common typo `--set 8` an invalid channel rather than a serial nobody has.
@@ -117,6 +125,17 @@ def seconds_limit(value: str):
         raise argparse.ArgumentTypeError(f"invalid limit '{value}', expected a number of seconds or -1") from None
 
 
+def positive_count(value: str) -> int:
+    """argparse type of a count which must be at least 1."""
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0  # refused below along with the rest
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"invalid count '{value}', expected 1 or more")
+    return number
+
+
 def one_channel(value: str) -> int:
     """Return the channel a single value names: a channel number, or a device reference."""
     return int(value) if is_channel_number(value) else resolve_channel(value)
@@ -168,8 +187,18 @@ def main():
         args = build_parser().parse_args(argv)
         if args.command == 'serve':
             configure_logging(args.log_level)
-            endpoint = args.endpoint or DEFAULT_ENDPOINT
-            sys.exit(serve(endpoint, transport.device, transport.timeout, token, token_source, args.max_toff))
+            sys.exit(
+                serve(
+                    args.endpoint or DEFAULT_ENDPOINT,
+                    transport.device,
+                    transport.timeout,
+                    token,
+                    token_source,
+                    max_toff=args.max_toff,
+                    max_connections=args.max_connections,
+                    token_timeout=args.token_timeout,
+                )
+            )
         # Deliberately no configure_logging here: it would make the one inside `run_parsed` a
         # no op and so silently kill `--log-level` for the plain command line.
         run_parsed(args, device_path=transport.device)
@@ -313,6 +342,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar='SECONDS',
         type=seconds_limit,
         help=f'longest reset --toff a client may ask for, -1 for no limit (default {DEFAULT_MAX_TOFF:g})',
+    )
+    serve.add_argument(
+        '--max-connections',
+        default=DEFAULT_MAX_CONNECTIONS,
+        metavar='COUNT',
+        type=positive_count,
+        help=f'connections served at once, the others wait their turn (default {DEFAULT_MAX_CONNECTIONS})',
+    )
+    serve.add_argument(
+        '--token-timeout',
+        default=DEFAULT_TOKEN_TIMEOUT,
+        metavar='SECONDS',
+        type=seconds_limit,
+        help=f'time a connection has to give the --token, -1 for no limit (default {DEFAULT_TOKEN_TIMEOUT:g})',
     )
 
     return parser

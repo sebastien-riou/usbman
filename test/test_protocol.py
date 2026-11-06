@@ -8,7 +8,7 @@ import types
 
 import pytest
 from usbman import cli
-from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request
+from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request, token_digest
 
 DEVICE = '/dev/fake'
 
@@ -282,7 +282,7 @@ def test_a_toff_at_the_limit_is_granted(hub, routing):
     assert out == 'On: 1 \n'
 
 
-def serve_one_connection(routing, request_timeout=-1):
+def serve_one_connection(routing, request_timeout=-1, token=None, token_timeout=None):
     """Run one `Handler` in a thread over a socket pair, and return the client end and the thread.
 
     The server end gets a small send buffer, so that its writes block after a few KB which the
@@ -294,7 +294,8 @@ def serve_one_connection(routing, request_timeout=-1):
         device_path=DEVICE,
         routing=routing,
         request_timeout=request_timeout,
-        token_digest=None,
+        token_digest=None if token is None else token_digest(token),
+        token_timeout=token_timeout,
         max_toff=None,
         logger=logging.getLogger('usbman.server'),
     )
@@ -335,6 +336,52 @@ def test_a_client_which_stops_reading_is_dropped_at_its_first_timed_out_write(hu
         client.close()
         thread.join(timeout=60)
     assert dropped
+
+
+def test_a_connection_which_does_not_give_the_token_in_time_is_dropped(hub, routing):
+    """Or a client without the token could hold one of the server's slots just by saying nothing."""
+    with routing:
+        client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
+        thread.join(timeout=5)
+        dropped = not thread.is_alive()
+        client.settimeout(1)
+        closed = client.recv(4096) == b''
+        client.close()
+    assert dropped
+    assert closed
+
+
+def test_sending_the_token_a_byte_at_a_time_does_not_stretch_the_deadline(hub, routing):
+    """Each byte would restart a socket timeout; the deadline is for the line as a whole."""
+    with routing:
+        client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
+        started = time.monotonic()
+        try:
+            while thread.is_alive() and time.monotonic() - started < 3:
+                client.sendall(b't')  # never a whole line
+                time.sleep(0.05)
+        except OSError:
+            pass  # the server has dropped the connection
+        thread.join(timeout=5)
+        dropped = not thread.is_alive()
+        client.close()
+    assert dropped
+    assert time.monotonic() - started < 2
+
+
+def test_once_the_token_is_given_a_connection_may_stay_idle(hub, routing):
+    with routing:
+        client, thread = serve_one_connection(routing, token='secret', token_timeout=0.3)
+        replies = client.makefile('r')
+        client.sendall(b'token secret\n')
+        given = replies.readline()
+        time.sleep(0.6)  # twice the deadline
+        client.sendall(b'\n')
+        answer = [replies.readline(), replies.readline()]
+        client.close()
+        thread.join(timeout=5)
+    assert given == 'EXIT 0\n'
+    assert answer == ['O All off\n', 'EXIT 0\n']
 
 
 @pytest.mark.parametrize('code', [0, 2, -1, -2])

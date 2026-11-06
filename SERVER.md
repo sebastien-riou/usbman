@@ -61,7 +61,8 @@ Details worth knowing:
   pipeline cannot tell the difference.
 - **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space.
 - **One connection carries as many requests as you like**, so a session with `nc` is a small
-  REPL and a script can hold one connection open.
+  REPL and a script can hold one connection open. It holds one of the server's
+  [four slots](#four-connections-at-once) meanwhile.
 - **An answer is sent once its request has run**, never while the hub is held, so a client which
   does not read its answers holds up nobody but itself. The flip side is that a long `--reset`
   sends its debug lines all at the end.
@@ -82,6 +83,21 @@ hub and drive it through that.
 
 The lock covers running a request, not sending its answer. Sending takes as long as the client
 takes to read, and a client which never reads must not keep the others from the hub.
+
+## Four connections at once
+
+The server serves up to four connections at a time, `--max-connections` to change it. A fifth
+waits its turn: it may connect and send its request, but the server only takes it up once one of
+the four has closed. Until then it costs the server neither a thread nor a descriptor, which is
+what keeps a flood of idle connections from exhausting them. Waiting rather than being refused
+costs a client nothing, since the hub runs one request at a time anyway. Past a handful waiting,
+the system holds off further connection attempts, which then take a few seconds to get through.
+
+An open connection keeps its slot, idle or not, so four `nc` sessions left open stall every
+other client. With a token, a connection which has not given it in time is dropped, so somebody
+who does not know it cannot hold the slots (see [Security](#security)). Nothing stops a client
+which keeps opening connections from delaying the others, though: the limit keeps the server
+healthy under a flood, not the hub available.
 
 ## A request cannot be cancelled
 
@@ -114,6 +130,7 @@ its channels back on.
 | --- | --- | --- |
 | `--connect` | connecting, and each read of the answer | `-1`, wait indefinitely |
 | `--serve` | waiting for the next request, and sending an answer; a client which runs out of either is dropped | `-1`, never drop a client |
+| `serve --token-timeout` | giving the token, the line as a whole; a client which takes longer is dropped | `10`, `-1` for none |
 
 Neither cuts a request short once it runs. The one request which can run long is a pulse, and
 [its limit](#a-pulse-has-a-limit) applies before it starts.
@@ -162,6 +179,12 @@ usbman --connect 127.0.0.1:9877 --token "$TOKEN" +1
 - **`USBMAN_TOKEN` stands for `--token`** at both ends. It keeps the token off the command line,
   where every user of the machine can read it with `ps`, and it lets a script written for
   `USBMAN_SERVER` reach a server with a token with no change.
+- **A connection has 10 seconds to give the token**, `--token-timeout` to change it and `-1`
+  for no limit. Otherwise somebody who does not know the token could hold every
+  [slot](#four-connections-at-once) by connecting and saying nothing. The deadline is for the
+  token line as a whole, so sending it a byte at a time does not stretch it, and it is over once
+  the token is given: the connection may then stay idle as long as it likes. A connection which
+  misses it is closed without a word, the server never writing to a client which may not read.
 - **The server says when it starts whether it requires a token, and where it got it**, without
   ever showing the token itself:
 

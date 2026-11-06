@@ -319,7 +319,8 @@ USBMAN_SERVER= usbman +1 +5   # this one goes back to the local hub
 ````
 The one difference: a server grants a `reset` at most 60 seconds of `--toff`, since every other
 client waits for the hub meanwhile. `usbman serve --max-toff SECONDS` changes that, and `-1`
-lifts it.
+lifts it. A server also serves four connections at once, and the others wait their turn
+(`--max-connections`).
 **There is no authentication unless you ask for it.** A server started with `--token` serves
 only the clients which give the same token:
 ````
