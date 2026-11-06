@@ -62,7 +62,9 @@ Details worth knowing:
 - **Content after the tag is verbatim.** `On: 1 3 ` really does end with a space.
 - **One connection carries as many requests as you like**, so a session with `nc` is a small
   REPL and a script can hold one connection open.
-- Lines are sent as they are produced, so a long `--reset` shows its progress.
+- **An answer is sent once its request has run**, never while the hub is held, so a client which
+  does not read its answers holds up nobody but itself. The flip side is that a long `--reset`
+  sends its debug lines all at the end.
 - Anything which is not valid UTF-8 is replaced rather than raising, so a port scanner or a
   stray TLS handshake becomes a refused line instead of an exception.
 - Exit codes round trip signed: `-1` is a usbman error and `-2` means it could not talk to the
@@ -78,12 +80,31 @@ The lock is in process only. It does not stop a plain `usbman` run on the machin
 server, nor a second server, from talking to the same hub at the same time. Run one server for a
 hub and drive it through that.
 
+The lock covers running a request, not sending its answer. Sending takes as long as the client
+takes to read, and a client which never reads must not keep the others from the hub.
+
 ## A request cannot be cancelled
 
 If the client disconnects, the hub operation still **runs to its end**. This is deliberate: were
 a broken connection allowed to interrupt the command, a client which vanished in the middle of an
 `--reset` would leave the channels off for good. Interrupting the client is safe, and the
 pulse completes without it.
+
+## A pulse has a limit
+
+The other side of a request which cannot be cancelled: `reset all --toff 1e9` would hold every
+channel off, and every other client waiting for the hub, for 31 years, with no way to cut it
+short but restarting the server. So the server refuses a `--toff` longer than its limit, before
+switching anything, and answers `EXIT -1`. A pulse which fits runs as before.
+
+```
+usbman serve                    # pulses of up to 60 seconds
+usbman serve --max-toff 600     # up to 10 minutes
+usbman serve --max-toff -1      # no limit
+```
+
+There is no limit locally: a local run keeps nobody else waiting, and Ctrl-C ends the pulse with
+its channels back on.
 
 ## Timeouts
 
@@ -92,10 +113,10 @@ pulse completes without it.
 | Side | What it bounds | Default |
 | --- | --- | --- |
 | `--connect` | connecting, and each read of the answer | `-1`, wait indefinitely |
-| `--serve` | waiting for the next request on an idle connection | `-1`, never drop a client |
+| `--serve` | waiting for the next request, and sending an answer; a client which runs out of either is dropped | `-1`, never drop a client |
 
-Nothing bounds how long a request may run: `--toff` is yours to choose, and any cap would cut a
-legitimate long pulse short.
+Neither cuts a request short once it runs. The one request which can run long is a pulse, and
+[its limit](#a-pulse-has-a-limit) applies before it starts.
 
 ## The device is resolved once
 

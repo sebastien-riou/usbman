@@ -1,20 +1,23 @@
 """`execute_request`: running a hub command and framing what it produced."""
 
+import logging
+import socket
 import threading
 import time
+import types
 
 import pytest
 from usbman import cli
-from usbman.server import EXIT_PREFIX, execute_request
+from usbman.server import EXIT_PREFIX, LOCK, Handler, execute_request
 
 DEVICE = '/dev/fake'
 
 
-def run(argv, routing, device_path=DEVICE):
+def run(argv, routing, device_path=DEVICE, max_toff=None):
     """Return the framed lines and the exit code of one request."""
     lines = []
     with routing:
-        code = execute_request(argv, device_path, lines.append, routing)
+        code = execute_request(argv, device_path, lines.append, routing, max_toff)
     return lines, code
 
 
@@ -243,6 +246,95 @@ def test_requests_are_serialised(hub, routing):
     for first, second in zip(writes[::2], writes[1::2]):
         assert first == 'SPpass    80FFFFFF\r'  # all off
         assert second == 'SPpass    FFFFFFFF\r'  # and back on
+
+
+@pytest.mark.parametrize('toff', ['nan', 'inf', '-1'])
+def test_an_invalid_toff_switches_nothing(hub, routing, toff):
+    """It used to switch the channels off, then fail to wait and leave them so."""
+    hub.state = 0x7F
+    lines, code = run(['reset', 'all', '--toff', toff], routing)
+    _, err = streams(lines)
+    assert code == cli.EXIT_USAGE
+    assert f"invalid duration '{toff}'" in err
+    assert hub.state == 0x7F
+    assert not any(command.startswith('SP') for command in hub.commands)
+
+
+def test_a_toff_above_the_limit_is_refused_before_anything_is_switched(hub, routing, monkeypatch):
+    """Nobody could cut it short, so it would hold the hub, and its channels off, for good."""
+    hub.state = 0x7F
+
+    def asleep(seconds):
+        raise AssertionError(f'slept {seconds}s')  # fail now rather than wait as long as asked
+
+    monkeypatch.setattr(cli.time, 'sleep', asleep)
+    lines, code = run(['reset', 'all', '--toff', '1e9'], routing, max_toff=60)
+    _, err = streams(lines)
+    assert code == cli.EXIT_ERROR
+    assert '--toff 1e+09 is longer than this server allows, 60 seconds at most' in err
+    assert hub.commands == []
+
+
+def test_a_toff_at_the_limit_is_granted(hub, routing):
+    lines, code = run(['reset', '1', '--toff', '0.1'], routing, max_toff=0.1)
+    out, _ = streams(lines)
+    assert code == 0
+    assert out == 'On: 1 \n'
+
+
+def serve_one_connection(routing, request_timeout=-1):
+    """Run one `Handler` in a thread over a socket pair, and return the client end and the thread.
+
+    The server end gets a small send buffer, so that its writes block after a few KB which the
+    client does not read. To be called with the routing installed, as a server runs.
+    """
+    client, server_end = socket.socketpair()
+    server_end.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    server = types.SimpleNamespace(
+        device_path=DEVICE,
+        routing=routing,
+        request_timeout=request_timeout,
+        token_digest=None,
+        max_toff=None,
+        logger=logging.getLogger('usbman.server'),
+    )
+
+    def handle():
+        try:
+            Handler(server_end, ('test', 0), server)  # handles the connection from the constructor
+        finally:
+            server_end.close()
+
+    thread = threading.Thread(target=handle, daemon=True)
+    thread.start()
+    return client, thread
+
+
+def test_a_client_which_does_not_read_never_holds_the_hub_lock(hub, routing):
+    """Writing an answer blocks for as long as the client does not read: that client alone waits."""
+    with routing:
+        client, thread = serve_one_connection(routing)
+        client.sendall(b'--help\n' * 100)  # a few hundred KB of answers, which nobody reads
+        time.sleep(0.5)  # for the handler to fill the buffers and block
+        acquired = LOCK.acquire(timeout=5)
+        if acquired:
+            LOCK.release()
+        client.close()
+        thread.join(timeout=10)
+    assert acquired
+    assert not thread.is_alive()
+
+
+def test_a_client_which_stops_reading_is_dropped_at_its_first_timed_out_write(hub, routing):
+    """Rather than the server spending another timeout on every line still to come."""
+    with routing:
+        client, thread = serve_one_connection(routing, request_timeout=0.5)
+        client.sendall(b'--help\n' * 100)
+        thread.join(timeout=5)
+        dropped = not thread.is_alive()
+        client.close()
+        thread.join(timeout=60)
+    assert dropped
 
 
 @pytest.mark.parametrize('code', [0, 2, -1, -2])

@@ -39,6 +39,7 @@ TOKEN_KEYWORD = 'token'
 # One hub, so one request at a time. The lock spans the whole request and not a single command:
 # `--reset` is several commands with a sleep in between, and two clients interleaving there
 # would leave channels off. It is in process only, a local `usbman` run still interleaves.
+# It never spans the sending of an answer, which lasts as long as the client cares to not read.
 LOCK = threading.Lock()
 
 
@@ -240,11 +241,22 @@ class Routing:
             self.level_filter.clear_level()
 
 
-def execute_request(argv, device_path, emit, routing):
-    """Run one hub command, stream its output to `emit`, and return its exit code."""
+def execute_request(argv, device_path, emit, routing, max_toff=None):
+    """Run one hub command, pass its output to `emit` line by line, and return its exit code.
+
+    `emit` is called with the hub lock held, so it must not block: the server hands it a list to
+    collect into, and sends the answer once the lock is released. `max_toff` is the longest
+    `reset --toff` granted, None for no limit.
+    """
     with LOCK, routing.capture(emit):
         try:
-            cli.run(argv, device_path=device_path, local=False, setup_logging=routing.level_filter.set_level)
+            cli.run(
+                argv,
+                device_path=device_path,
+                local=False,
+                max_toff=max_toff,
+                setup_logging=routing.level_filter.set_level,
+            )
         except SystemExit as e:  # argparse and every error path of the command line
             if e.code is None:
                 return 0
@@ -272,6 +284,7 @@ class Handler(socketserver.StreamRequestHandler):
         if timeout is not None and timeout >= 0:
             self.connection.settimeout(timeout)
         self.authenticated = self.server.token_digest is None
+        self.gone = False
         while True:
             try:
                 line = self.rfile.readline(MAX_REQUEST)
@@ -281,7 +294,7 @@ class Handler(socketserver.StreamRequestHandler):
                 return
             code = self.run_line(line)
             self.emit(f'{EXIT_PREFIX}{code}\n')
-            if code == cli.EXIT_USAGE:
+            if self.gone or code == cli.EXIT_USAGE:
                 return
 
     def run_line(self, line) -> int:
@@ -302,7 +315,9 @@ class Handler(socketserver.StreamRequestHandler):
             return self.refuse(
                 f'this server requires a token: use --token or USBMAN_TOKEN, or send "{TOKEN_KEYWORD} TOKEN" first'
             )
-        code = execute_request(argv, self.server.device_path, self.emit, self.server.routing)
+        answer = []
+        code = execute_request(argv, self.server.device_path, answer.append, self.server.routing, self.server.max_toff)
+        self.emit(''.join(answer))  # after the lock: a client which does not read holds up only itself
         if code == cli.EXIT_USAGE:
             self.log_refusal('the request does not parse')  # argparse has told the client what is wrong
         return code
@@ -336,16 +351,20 @@ class Handler(socketserver.StreamRequestHandler):
         self.server.logger.debug(f'refused {host}:{port}: {reason}')
 
     def emit(self, text):
-        """Write one framed line, tolerating a client which has gone away.
+        """Send framed lines to the client, unless it has stopped taking them.
 
-        Swallowing the error is what keeps a disconnect from aborting the hub operation: were
-        it to propagate out of a `print` inside the command, a `--reset` would stop with
-        the channels still off.
+        Never called with the hub lock held: a write blocks for as long as the client does not
+        read. One which fails, or outlasts `--timeout`, marks the client gone, and `handle` then
+        ends the connection rather than wait again for every line still to come. The command
+        never writes here itself, so nothing that happens to the socket can stop it half way.
         """
+        if self.gone:
+            return
         try:
             self.wfile.write(text.encode())
         except OSError:
-            self.server.logger.debug('client gone, finishing the request anyway')
+            self.gone = True
+            self.server.logger.debug('client gone, closing the connection')
 
 
 class Server(socketserver.ThreadingTCPServer):
@@ -355,12 +374,20 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1, token=None, token_source='--token'):
+def serve(
+    endpoint=DEFAULT_ENDPOINT,
+    device_path=None,
+    timeout=-1,
+    token=None,
+    token_source='--token',
+    max_toff=cli.DEFAULT_MAX_TOFF,
+):
     """Serve the hub commands on `endpoint` until interrupted.
 
     With a `token`, a connection has every line refused until it has given it. `token_source`,
-    `--token` or `USBMAN_TOKEN`, is named in the line logged at startup. argparse allows one
-    command, so `serve` cannot carry a hub command and there is nothing left to validate.
+    `--token` or `USBMAN_TOKEN`, is named in the line logged at startup. A `reset` asking for a
+    `--toff` longer than `max_toff` is refused, unless it is None. argparse allows one command,
+    so `serve` cannot carry a hub command and there is nothing left to validate.
     """
     if device_path is None:
         device_path = find_device_path()
@@ -377,6 +404,7 @@ def serve(endpoint=DEFAULT_ENDPOINT, device_path=None, timeout=-1, token=None, t
     server.routing = routing
     server.request_timeout = timeout
     server.token_digest = None if token is None else token_digest(token)
+    server.max_toff = max_toff
     server.logger = logging.getLogger(__name__)
 
     access = 'no authentication' if token is None else f'token required, from {token_source}'

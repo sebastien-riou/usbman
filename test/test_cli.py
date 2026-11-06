@@ -266,3 +266,56 @@ def test_only_one_command_at_a_time():
 def test_log_level_is_accepted_before_or_after_the_command():
     assert cli.build_parser().parse_args(['--log-level', 'DEBUG', 'list']).log_level == 'DEBUG'
     assert cli.build_parser().parse_args(['list', '--log-level', 'DEBUG']).log_level == 'DEBUG'
+
+
+@pytest.mark.parametrize('value', ['nan', 'inf', '1e400', '-1', '-0.5', 'x', ''])
+def test_toff_refuses_what_cannot_be_waited(value):
+    """`time.sleep` refuses these too, but only once the channels are already off."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.seconds(value)
+
+
+@pytest.mark.parametrize(('value', 'expected'), [('0', 0.0), ('0.5', 0.5), ('3', 3.0), ('1e9', 1e9)])
+def test_toff_accepts_any_finite_duration(value, expected):
+    assert cli.seconds(value) == expected
+
+
+@pytest.mark.parametrize(
+    ('argv', 'limit'),
+    [(['serve'], cli.DEFAULT_MAX_TOFF), (['serve', '--max-toff', '5'], 5.0), (['serve', '--max-toff', '-1'], None)],
+)
+def test_max_toff_has_a_default_which_minus_one_lifts(argv, limit):
+    assert cli.build_parser().parse_args(argv).max_toff == limit
+
+
+@pytest.mark.parametrize('value', ['nan', 'inf', '-2', 'x'])
+def test_max_toff_refuses_what_is_neither_a_limit_nor_none(value):
+    with pytest.raises(argparse.ArgumentTypeError, match='or -1'):
+        cli.seconds_limit(value)
+
+
+def pulse(argv):
+    """Run a `reset` the way the plain command line does, with no limit on `--toff`."""
+    cli.run_parsed(cli.build_parser().parse_args(argv), device_path='/dev/fake', setup_logging=lambda level: None)
+
+
+def test_an_interrupted_pulse_turns_its_channels_back_on(hub, monkeypatch):
+    """Ctrl-C while the channels are off: they come back on before the interrupt goes its way."""
+    hub.state = 0x7F
+
+    def interrupted(seconds):
+        assert hub.state == 0x7A  # 1 and 3 off
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.time, 'sleep', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        pulse(['reset', '1', '3'])
+    assert hub.state == 0x7F
+
+
+def test_a_pulse_too_long_to_wait_turns_its_channels_back_on(hub):
+    """Finite, so it passes the type, but past what `time.sleep` can wait."""
+    hub.state = 0x7F
+    with pytest.raises(RuntimeError, match='cannot stay off for 1e\\+300 seconds'):
+        pulse(['reset', 'all', '--toff', '1e300'])
+    assert hub.state == 0x7F

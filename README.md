@@ -116,7 +116,8 @@ usbman reset 1 5 --toff 0.5     # held off for half a second
 usbman reset all                # power cycle the whole hub
 ````
 `--toff` is how long they stay off, one second by default. Note that the reset channels are all
-**on** when the command returns, whether they were on or off to begin with.
+**on** when the command returns, whether they were on or off to begin with, and even when it is
+interrupted: Ctrl-C while they are off turns them back on at once.
 
 ### Persist the state across power down
 The hub can store a state in its flash and come up in that state after a power down. `--save`
@@ -316,6 +317,9 @@ export USBMAN_SERVER=127.0.0.1:9877
 usbman +1 +5
 USBMAN_SERVER= usbman +1 +5   # this one goes back to the local hub
 ````
+The one difference: a server grants a `reset` at most 60 seconds of `--toff`, since every other
+client waits for the hub meanwhile. `usbman serve --max-toff SECONDS` changes that, and `-1`
+lifts it.
 **There is no authentication unless you ask for it.** A server started with `--token` serves
 only the clients which give the same token:
 ````

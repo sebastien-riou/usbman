@@ -1,5 +1,6 @@
 import argparse
 import logging
+import math
 import os
 import re
 import sys
@@ -29,6 +30,10 @@ from usbman import (
 
 # Accepted in place of a channel number to designate every channel of the hub at once.
 ALL_CHANNELS = 'all'
+
+# The longest `reset --toff` a server grants a client unless `serve --max-toff` says otherwise.
+# A pulse holds the hub, and its channels off, for all of that time, and nothing can cut it short.
+DEFAULT_MAX_TOFF = 60.0
 
 # A run of up to this many digits is a channel number; a longer one is a USB serial number.
 # The boundary is what lets an all digit serial such as '000000000' be named directly, while
@@ -87,6 +92,31 @@ def channel(value: str) -> str:
     return value  # a serial number, looked up later
 
 
+def seconds(value: str) -> float:
+    """argparse type of a duration: a finite number of seconds, 0 or more.
+
+    `time.sleep` refuses NaN, infinities and negative numbers too, but only once the channels
+    of a `reset` are already off: checking here refuses them before anything is switched.
+    """
+    try:
+        number = float(value)
+    except ValueError:
+        number = math.nan  # refused below along with the rest
+    if not 0 <= number < math.inf:  # NaN compares false to everything
+        raise argparse.ArgumentTypeError(f"invalid duration '{value}', expected a number of seconds, 0 or more")
+    return number
+
+
+def seconds_limit(value: str):
+    """argparse type of a limit in seconds which `-1` lifts, returning None then."""
+    if value == '-1':
+        return None
+    try:
+        return seconds(value)
+    except argparse.ArgumentTypeError:
+        raise argparse.ArgumentTypeError(f"invalid limit '{value}', expected a number of seconds or -1") from None
+
+
 def one_channel(value: str) -> int:
     """Return the channel a single value names: a channel number, or a device reference."""
     return int(value) if is_channel_number(value) else resolve_channel(value)
@@ -138,7 +168,8 @@ def main():
         args = build_parser().parse_args(argv)
         if args.command == 'serve':
             configure_logging(args.log_level)
-            sys.exit(serve(args.endpoint or DEFAULT_ENDPOINT, transport.device, transport.timeout, token, token_source))
+            endpoint = args.endpoint or DEFAULT_ENDPOINT
+            sys.exit(serve(endpoint, transport.device, transport.timeout, token, token_source, args.max_toff))
         # Deliberately no configure_logging here: it would make the one inside `run_parsed` a
         # no op and so silently kill `--log-level` for the plain command line.
         run_parsed(args, device_path=transport.device)
@@ -250,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
         'reset', parents=[switching], help='turn channel(s) off and back on, to power cycle what is on them'
     )
     reset.add_argument('channels', nargs='+', metavar='CHANNEL', help=channels_help, type=channel)
-    reset.add_argument('--toff', default=1, help='seconds to stay off', type=float)
+    reset.add_argument('--toff', default=1.0, help='seconds to stay off', type=seconds)
 
     commands.add_parser('save', parents=[common], help='store the current states as the ones the hub powers up with')
 
@@ -276,6 +307,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = commands.add_parser('serve', parents=[common], help='serve the commands above on a socket')
     serve.add_argument('endpoint', nargs='?', default=None, metavar='HOST:PORT', help='default 127.0.0.1:9877')
+    serve.add_argument(
+        '--max-toff',
+        default=DEFAULT_MAX_TOFF,
+        metavar='SECONDS',
+        type=seconds_limit,
+        help=f'longest reset --toff a client may ask for, -1 for no limit (default {DEFAULT_MAX_TOFF:g})',
+    )
 
     return parser
 
@@ -405,7 +443,7 @@ def print_characterization(sockets) -> None:
     print('Record the table and what it settles in NOTES.md, then commit it.')
 
 
-def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logging):
+def run(argv=None, *, device_path=None, local=True, max_toff=None, setup_logging=configure_logging):
     """Parse a command line and run it. The server calls this with a client's arguments.
 
     The shorthand is expanded here as well as in `main`, so that `+1 -3` works when typed
@@ -414,14 +452,17 @@ def run(argv=None, *, device_path=None, local=True, setup_logging=configure_logg
     """
     argv = expand_shorthand(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
-    return run_parsed(args, device_path=device_path, local=local, setup_logging=setup_logging)
+    return run_parsed(args, device_path=device_path, local=local, max_toff=max_toff, setup_logging=setup_logging)
 
 
-def run_parsed(args, *, device_path=None, local=True, setup_logging=configure_logging):
+def run_parsed(args, *, device_path=None, local=True, max_toff=None, setup_logging=configure_logging):
     """Run one already parsed command.
 
     `local` is false for a request which arrived over a socket: the commands which act on this
     machine are refused then, while asking it about a device stays available.
+
+    `max_toff` is the longest `reset --toff` allowed, None for no limit. A server sets it: a
+    pulse keeps its channels off and every other client waiting, and nobody can cut it short.
 
     `device_path` comes from the caller, never from the command line: locally from the
     `--device` transport option, in a server from the device it resolved at startup. It is
@@ -433,6 +474,9 @@ def run_parsed(args, *, device_path=None, local=True, setup_logging=configure_lo
 
     if args.command in LOCAL_ONLY and not local:
         logging.error(f'{args.command} acts on the machine the hub is attached to, it cannot be asked for from here')
+        sys.exit(EXIT_ERROR)
+    if args.command == 'reset' and max_toff is not None and args.toff > max_toff:
+        logging.error(f'--toff {args.toff:g} is longer than this server allows, {max_toff:g} seconds at most')
         sys.exit(EXIT_ERROR)
 
     # Answered from sysfs and the snapshot alone, so they work with the hub unplugged and for a
@@ -531,11 +575,16 @@ def run_parsed(args, *, device_path=None, local=True, setup_logging=configure_lo
             state &= ~(1 << (i - 1))
         tmp_state = set_state(device_path, state)
         logging.debug(f'tmp_state = {tmp_state:#02x}')
-        time.sleep(args.toff)
-        for i in to_reset:
-            state |= 1 << (i - 1)
-        current_state = set_state(device_path, state)
-        logging.debug(f'current_state = {current_state:#02x}')
+        try:
+            time.sleep(args.toff)
+        except (OverflowError, OSError) as e:  # longer than this platform can wait, some 292 years on Linux
+            raise RuntimeError(f'cannot stay off for {args.toff:g} seconds: {e}') from e
+        finally:
+            # Back on whatever ended the wait, Ctrl-C included: a pulse is never left half done.
+            for i in to_reset:
+                state |= 1 << (i - 1)
+            current_state = set_state(device_path, state)
+            logging.debug(f'current_state = {current_state:#02x}')
 
     # Last, so that the state saved is the one the command has just produced. It is also the one
     # printed below, the hub's answer to a save carrying no states.

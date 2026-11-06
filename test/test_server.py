@@ -8,6 +8,7 @@ that can prove the two have not drifted.
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -249,6 +250,39 @@ def test_a_disconnected_client_does_not_abort_the_pulse(server):
         time.sleep(0.4)  # mid pulse, with the channels off
     time.sleep(2.0)
     assert talk(server, '').count('On: 1 2 3 4 5 6 7') == 1
+
+
+def test_a_pulse_longer_than_the_server_allows_is_refused(server):
+    """It parsed, so it is a failure, not a refusal: the connection carries on."""
+    answer = talk(server, 'switch --on all', 'reset all --toff 1e9', '')
+    assert '60 seconds at most' in answer
+    assert 'EXIT -1\n' in answer
+    assert answer.endswith('O On: 1 2 3 4 5 6 7 \nEXIT 0\n')
+
+
+def test_max_toff_sets_the_limit(free_port):
+    process = start_server(free_port, '--max-toff', '0.2')
+    try:
+        answer = talk(free_port, 'reset 1 --toff 0.3', 'reset 1 --toff 0.2')
+    finally:
+        stop_server(process)
+    assert '0.2 seconds at most' in answer
+    assert answer.endswith('O On: 1 \nEXIT 0\n')
+
+
+def test_a_disconnect_at_debug_level_does_not_flood_the_log(free_port):
+    """A failed write used to log through the very client it failed on, recursing without end."""
+    process = start_server(free_port, '--log-level', 'DEBUG')
+    try:
+        with socket.create_connection(('127.0.0.1', free_port)) as client:
+            client.sendall(b'--log-level DEBUG reset all --toff 0.3\n')
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))  # close with a reset
+        time.sleep(0.6)  # past the pulse, and the answer nobody was there to take
+        assert 'O On: 1 2 3 4 5 6 7 \n' in talk(free_port, '')
+    finally:
+        _, err = stop_server(process)
+    assert 'Traceback' not in err
+    assert 'RecursionError' not in err
 
 
 def test_a_server_with_a_token_refuses_whatever_comes_before_it(token_server):
