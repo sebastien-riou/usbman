@@ -62,11 +62,21 @@ jobs:
 
       - name: Minimaly test
         run: |
+          # Every error path of the frozen binary used to die on a NameError, because `exit`
+          # comes from `site` which PyInstaller does not ship, so each must end with its own
+          # status. --help alone never caught it. `|| status=$?` because the step runs under
+          # `bash -e`, which would otherwise end it at the first command which fails.
+          expect_exit() {
+            local expected=$1 status=0
+            shift
+            "$@" || status=$?
+            echo "exit status $status, expected $expected"
+            test "$status" -eq "$expected"
+          }
           dist/usbman --help
-          # every error path of the frozen binary used to die on a NameError, because `exit`
-          # comes from `site` which PyInstaller does not ship. --help alone never caught it.
-          dist/usbman --device /nonexistent --set 1 --clear 1 ; test $? -eq 255
-          dist/usbman --connect 127.0.0.1:1 --on 1 ; test $? -eq 255
+          expect_exit 2 dist/usbman switch --on 8                                  # usage error
+          expect_exit 254 dist/usbman --device /nonexistent switch --on 1 --off 2  # no hub there
+          expect_exit 255 dist/usbman --connect 127.0.0.1:1 +1                     # no server there
           mv dist/usbman usbman-${{ matrix.build.platform }}
 
       - name: Upload Artifact
