@@ -15,6 +15,24 @@ For example:
 pip install usbman
 ````
 
+### Using pipx
+[pipx](https://pipx.pypa.io) installs `usbman` from pypi into a virtual environment of its own
+and puts the command on your PATH. It needs nothing from the system Python packages and changes
+none of them, which also makes it the way to go on distributions where `pip install` refuses with
+`externally-managed-environment`:
+````
+pipx install usbman
+pipx upgrade usbman      # later, to update it
+````
+To get the latest from github rather than the latest release:
+````
+pipx install --force git+https://github.com/sebastien-riou/usbman.git
+````
+`--force` replaces a version installed before, from pypi or from github; run the same line again
+to update.
+Without pipx, `sudo apt install pipx` installs it on Debian and Ubuntu. Then run
+`pipx ensurepath` once and open a new terminal, so that `~/.local/bin` is on your PATH.
+
 ### Using a pre-built release
 Place the binary in your PATH.
 
