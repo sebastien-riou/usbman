@@ -161,3 +161,35 @@ def test_usbman_dir_replaces_both(tmp_path, monkeypatch):
 def test_the_snapshot_is_never_looked_for_in_the_config_directory(xdg, tmp_path):
     """Only the nicknames are searched for: usbman writes the snapshot, so it has one home."""
     assert usbman.snapshot_path() == str(tmp_path / 'state' / 'usbman' / 'snapshot')
+
+
+def test_a_reference_found_nowhere_lists_the_nicknames(sysfs):
+    """Most likely a nickname mistyped, or one never given: say which ones there are."""
+    write(sysfs.nicknames, f'stlink {STLINK}\nnumaker NUMAKER123\npico {PICO}\n')
+    with pytest.raises(usbman.DeviceNotFoundError) as absent:
+        usbman.resolve_channel('stm32u5')
+    assert str(absent.value) == (
+        "No USB device has the serial number 'stm32u5', nor is it a nickname. "
+        'The nicknames are: numaker, pico, stlink'
+    )
+
+
+def test_a_reference_found_nowhere_says_where_nicknames_would_be(sysfs):
+    with pytest.raises(usbman.DeviceNotFoundError) as absent:
+        usbman.resolve_channel('stm32u5')
+    assert str(absent.value).endswith(f'nor is it a nickname. There are none in {sysfs.nicknames}')
+
+
+def test_an_absent_path_lists_no_nicknames(sysfs):
+    """A path is never read as a nickname, so they would be beside the point."""
+    write(sysfs.nicknames, f'stlink {STLINK}\n')
+    with pytest.raises(usbman.DeviceNotFoundError) as absent:
+        usbman.resolve_channel(sysfs.path('ttyGONE'))
+    assert 'nickname' not in str(absent.value)
+
+
+def test_a_reference_found_nowhere_switches_nothing(sysfs, hub):
+    write(sysfs.nicknames, f'stlink {STLINK}\n')
+    with pytest.raises(usbman.DeviceNotFoundError, match='The nicknames are: stlink'):
+        usbman.cli.run(['-stm32u5'], device_path='/dev/fake', setup_logging=lambda level: None)
+    assert hub.commands == []

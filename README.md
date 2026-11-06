@@ -219,7 +219,12 @@ usbman only myboard pico         # those two on, everything else off
 usbman channel-of numaker
 ````
 A nickname can be used anywhere a channel number can, and it works for a device which is
-switched off exactly as its serial number does, through the snapshot below.
+switched off exactly as its serial number does, through the snapshot below. A name which is
+neither a nickname nor a serial number usbman can find is reported with the nicknames there are:
+````
+$ usbman -stm32u5
+ERROR:	No USB device has the serial number 'stm32u5', nor is it a nickname. The nicknames are: myboard, numaker, pico
+````
 
 **The file is yours**: usbman only ever reads it, so there are no commands to manage it — write
 it with a text editor. Everything after a `#` is a comment. A nickname shaped like a channel number,

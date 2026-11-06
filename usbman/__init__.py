@@ -475,11 +475,6 @@ def read_nicknames(path: str | None = None) -> dict:
     return nicknames
 
 
-def nickname_serial(nickname: str, path: str | None = None) -> str | None:
-    """Return the serial number a nickname stands for, or None when it is not one."""
-    return read_nicknames(path).get(nickname)
-
-
 def serial_nicknames(path: str | None = None) -> dict:
     """Return `serial -> nickname`, for showing a device by the name you gave it.
 
@@ -870,7 +865,9 @@ def resolve_channel(reference: str) -> int:
     device is nowhere to be found, which is exactly what a device on a switched off channel
     looks like.
     """
-    serial = nickname_serial(reference)
+    nicknames_file = nicknames_path()
+    nicknames = read_nicknames(nicknames_file)
+    serial = nicknames.get(reference)
     named = reference if serial is None else f'{reference} ({serial})'
     if serial is not None:
         logging.debug(f'{reference} is the nickname of {serial}')
@@ -880,9 +877,17 @@ def resolve_channel(reference: str) -> int:
     except DeviceNotFoundError as absent:
         channel = snapshot_channel(reference)
         if channel is None:
-            if serial is None:
-                raise
-            # Keep what went wrong and add which nickname led there, rather than replacing it.
-            raise DeviceNotFoundError(f'{absent} (the nickname {named.split()[0]!r})') from absent
+            if serial is not None:
+                # Keep what went wrong and add which nickname led there, rather than replacing it.
+                raise DeviceNotFoundError(f'{absent} (the nickname {named.split()[0]!r})') from absent
+            if reference.startswith('/'):
+                raise  # a path, which is no nickname either
+            # Most likely a nickname mistyped or never given, so say which ones there are.
+            known = (
+                f'The nicknames are: {", ".join(sorted(nicknames))}'
+                if nicknames
+                else f'There are none in {nicknames_file}'
+            )
+            raise DeviceNotFoundError(f'{absent}, nor is it a nickname. {known}') from absent
         logging.info(f'{named} is not connected, the snapshot puts it on channel {channel}')
         return channel
