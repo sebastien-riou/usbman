@@ -79,6 +79,12 @@ def test_a_long_digit_nickname_is_allowed(sysfs):
     assert usbman.read_nicknames() == {'1234': STLINK}
 
 
+def test_a_nickname_of_digits_from_another_script_is_allowed(sysfs):
+    """Only 0 to 9 make a channel number, so '٣' is never read as channel 3 and can be a nickname."""
+    write(sysfs.nicknames, f'٣ {STLINK}\n')
+    assert usbman.read_nicknames() == {'٣': STLINK}
+
+
 def test_an_unknown_nickname_names_itself_and_the_serial(sysfs):
     write(sysfs.nicknames, 'ghost NOSUCHSERIAL\n')
     with pytest.raises(usbman.DeviceNotFoundError, match=r"serial number 'NOSUCHSERIAL'.*nickname 'ghost'"):

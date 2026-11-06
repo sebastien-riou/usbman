@@ -18,6 +18,7 @@ from usbman import (
     live_devices,
     read_snapshot_entries,
     id_paths_for,
+    is_channel_number,
     serial_nicknames,
     tty_paths_on_channel,
     resolve_channel,
@@ -43,11 +44,6 @@ DEFAULT_MAX_CONNECTIONS = 4
 # says otherwise. Without it, a client which does not know the token could hold every slot.
 DEFAULT_TOKEN_TIMEOUT = 10.0
 
-# A run of up to this many digits is a channel number; a longer one is a USB serial number.
-# The boundary is what lets an all digit serial such as '000000000' be named directly, while
-# keeping the common typo `--set 8` an invalid channel rather than a serial nobody has.
-CHANNEL_NUMBER_DIGITS = 3
-
 LOG_FORMAT = '%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s'
 LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 LOG_LEVELS = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -72,11 +68,6 @@ TRANSPORT_HELP = """transport options, which go before the command and must be s
 The USBMAN_SERVER environment variable acts as --connect, so an existing script needs no
 change to drive a remote hub. USBMAN_SERVER= (empty) forces one command back to local.
 USBMAN_TOKEN acts as --token, and keeps the token out of the process list."""
-
-
-def is_channel_number(value: str) -> bool:
-    """Tell whether a token is meant as a channel number rather than a device reference."""
-    return value.isdigit() and len(value) <= CHANNEL_NUMBER_DIGITS
 
 
 def channel(value: str) -> str:

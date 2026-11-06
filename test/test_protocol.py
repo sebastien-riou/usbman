@@ -134,6 +134,18 @@ def test_an_unresolvable_reference_is_reported(hub, routing, sysfs):
     assert hub.commands == []  # refused before anything reached the hub
 
 
+@pytest.mark.parametrize('command', [['switch', '--on'], ['path-of'], ['channel-of']])
+@pytest.mark.parametrize('value', ['²', '٣'])
+def test_only_ascii_digits_are_a_channel_number(hub, routing, sysfs, command, value):
+    """`isdigit` takes these: '²' then crashed in `int`, and '٣' switched channel 3."""
+    lines, code = run([*command, value], routing)
+    _, err = streams(lines)
+    assert code == -1
+    assert value in err  # looked up as a device, and not found
+    assert 'invalid literal' not in err
+    assert hub.commands == []
+
+
 def test_save_comes_last_and_stores_the_resulting_state(hub, routing):
     _, code = run(['switch', '--on', '2', '3', '5', '--save'], routing)
     assert code == 0

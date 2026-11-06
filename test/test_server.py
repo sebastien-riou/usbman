@@ -154,6 +154,14 @@ def test_an_empty_usbman_server_goes_back_to_local(server):
     assert result.stdout == run_locally(['switch', '--on', '1']).stdout
 
 
+@pytest.mark.parametrize('arguments', [['--connect', '127.0.0.1:abc'], ['serve', '127.0.0.1:70000']])
+def test_a_bad_port_is_reported_without_a_traceback(arguments):
+    result = run_usbman(arguments)
+    assert result.returncode == 255
+    assert "invalid port '" in result.stderr
+    assert 'Traceback' not in result.stderr
+
+
 def test_device_cannot_be_given_to_a_client(server):
     result = run_usbman(['--connect', f'127.0.0.1:{server}', '--device', '/dev/ttyUSB9', 'switch', '--on', '1'])
     assert result.returncode == 255  # sys.exit(-1)

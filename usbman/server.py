@@ -19,7 +19,7 @@ import socketserver
 import sys
 import threading
 
-from usbman import cli, find_device_path
+from usbman import cli, find_device_path, is_ascii_digits
 
 DEFAULT_ENDPOINT = '127.0.0.1:9877'
 DEFAULT_HOST = '127.0.0.1'
@@ -98,15 +98,24 @@ def parse_endpoint(text, default_host=DEFAULT_HOST, default_port=DEFAULT_PORT):
     text = (text or '').strip()
     if not text:
         return (default_host, default_port)
+
+    def port_number(port):
+        # A RuntimeError, which the command line reports in one line: `int` raises ValueError on
+        # 'abc', and a port past 65535 passes it to raise OverflowError in `bind` or `connect`.
+        if not port:
+            return default_port
+        if not is_ascii_digits(port) or not 0 < int(port) < 65536:
+            raise RuntimeError(f'invalid port {port!r} in {text!r}, expected 1 to 65535')
+        return int(port)
+
     if text.startswith('['):  # bracketed IPv6, the only form where a colon is not a separator
         host, _, rest = text[1:].partition(']')
-        port = rest.lstrip(':')
-        return (host or default_host, int(port) if port else default_port)
+        return (host or default_host, port_number(rest.lstrip(':')))
     if ':' in text:
         host, _, port = text.rpartition(':')
-        return (host or default_host, int(port) if port else default_port)
-    if text.isdigit():
-        return (default_host, int(text))
+        return (host or default_host, port_number(port))
+    if is_ascii_digits(text):
+        return (default_host, port_number(text))
     return (text, default_port)
 
 
@@ -454,10 +463,10 @@ def serve(
     refused unless `allow_save`. At most `max_connections` are served at once. argparse allows
     one command, so `serve` cannot carry a hub command and there is nothing left to validate.
     """
+    host, port = parse_endpoint(endpoint)  # first, so that a typo in it is reported as such
     if device_path is None:
         device_path = find_device_path()
 
-    host, port = parse_endpoint(endpoint)
     Server.address_family = address_family(host)
     routing = Routing(logging.getLevelName(logging.getLogger().level))
     try:

@@ -31,13 +31,17 @@ def test_channel_rejects_bad_channel_numbers(value):
         ('B001DNH6', False),
         ('/dev/ttyACM0', False),
         ('all', False),
+        ('²', False),  # `isdigit` takes it, `int` does not
+        ('٣', False),  # `int` reads it as 3, which nobody types on purpose
     ],
 )
 def test_the_four_digit_boundary(value, is_number):
     assert cli.is_channel_number(value) is is_number
 
 
-@pytest.mark.parametrize('value', ['all', '/dev/ttyACM0', '/dev/serial/by-id/usb-x', 'B001DNH6', '1234', '000000000'])
+@pytest.mark.parametrize(
+    'value', ['all', '/dev/ttyACM0', '/dev/serial/by-id/usb-x', 'B001DNH6', '1234', '000000000', '²', '٣']
+)
 def test_channel_accepts_references_without_resolving_them(value):
     """`channel()` checks the shape only: resolution needs sysfs and the configured logging."""
     assert cli.channel(value) == value
@@ -200,10 +204,17 @@ def test_an_empty_token_is_a_usage_error():
         ('1.2.3.4:5', ('1.2.3.4', 5)),
         ('[::1]:9999', ('::1', 9999)),
         ('[::1]', ('::1', 9877)),
+        ('²', ('²', 9877)),  # a host name, not a port `int` would refuse
     ],
 )
 def test_parse_endpoint(text, endpoint):
     assert parse_endpoint(text) == endpoint
+
+
+@pytest.mark.parametrize('text', ['host:abc', 'host:²', 'host:-1', 'host:0', 'host:65536', '99999', '[::1]:x'])
+def test_a_port_which_is_not_one_is_reported_rather_than_raised(text):
+    with pytest.raises(RuntimeError, match='invalid port .* expected 1 to 65535'):
+        parse_endpoint(text)
 
 
 @pytest.mark.parametrize(

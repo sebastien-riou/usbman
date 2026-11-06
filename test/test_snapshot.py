@@ -59,6 +59,7 @@ def test_the_file_is_readable_and_hand_editable(sysfs):
         (f'# head\n\n1 {FT232R}  # one\n4 {STLINK}# two\n', {FT232R: 1, STLINK: 4}),
         (f'4 {STLINK} extra field\n1 {FT232R}\n', {FT232R: 1}),  # the bad line is skipped
         (f'notanumber {STLINK}\n1 {FT232R}\n', {FT232R: 1}),
+        (f'² {STLINK}\n1 {FT232R}\n', {FT232R: 1}),  # `isdigit` took it, and `int` then raised
     ],
 )
 def test_the_format_is_forgiving(sysfs, text, expected):

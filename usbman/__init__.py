@@ -109,6 +109,26 @@ def save_state(device_path) -> None:
 # Channels of a managed hub, channel `n` being the bit `n - 1` of the hub state.
 CHANNELS = tuple(range(1, 8))
 
+# A run of up to this many digits is a channel number; a longer one is a USB serial number.
+# The boundary is what lets an all digit serial such as '000000000' be named directly, while
+# keeping the common typo `--set 8` an invalid channel rather than a serial nobody has.
+CHANNEL_NUMBER_DIGITS = 3
+
+
+def is_ascii_digits(text: str) -> bool:
+    """Tell whether `text` is made of the digits 0 to 9 and nothing else.
+
+    `str.isdigit` is no test of what `int` takes: it accepts '²', which `int` refuses, and '٣',
+    which `int` reads as 3. A number typed on a keyboard is all this needs to accept.
+    """
+    return text.isascii() and text.isdigit()
+
+
+def is_channel_number(value: str) -> bool:
+    """Tell whether a token is meant as a channel number rather than a device reference."""
+    return is_ascii_digits(value) and len(value) <= CHANNEL_NUMBER_DIGITS
+
+
 # How long to allow for a device to vanish once its power is cut. Unlike enumeration, which is
 # slow and is what `--settle` is for, a disconnect is noticed in milliseconds, so trying a
 # channel which turns out to switch nothing costs this rather than a full settle.
@@ -382,7 +402,7 @@ def read_snapshot_entries(path: str | None = None) -> list:
     path = path or snapshot_path()
     entries = []
     for channel, serial, comment in read_pairs(path, 'channel serial'):
-        if not channel.isdigit():
+        if not is_ascii_digits(channel):
             logging.warning(f'{path}: {channel!r} is not a channel number, ignoring the line for {serial}')
             continue
         entries.append((int(channel), serial, comment or 'unknown device'))
@@ -431,7 +451,7 @@ def read_nicknames(path: str | None = None) -> dict:
                 f'{path} gives the nickname {nickname!r} to both {nicknames[nickname]} and {serial}, '
                 f'edit it so each nickname names one device'
             )
-        if nickname == 'all' or nickname.startswith('/') or (nickname.isdigit() and len(nickname) <= 3):
+        if nickname == 'all' or nickname.startswith('/') or is_channel_number(nickname):
             logging.warning(
                 f'{path}: the nickname {nickname!r} looks like a channel, a path or "all", '
                 f'so it would never be read as a nickname'
